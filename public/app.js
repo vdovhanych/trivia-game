@@ -77,6 +77,22 @@
       '...cc...', '...cc...', '..cccc..', '..cccc..',
       '.cccccc.', '.cccccc.', 'cc.cc.cc', 'c..cc..c',
     ], { c: 'currentColor' }),
+    Music: PX([
+      '.....cc.', '.....cc.', '.....cc.', '.....cc.',
+      '.....cc.', '.cccccc.', 'ccccccc.', '.ccccc..',
+    ], { c: 'currentColor' }),
+    'World geography': PX([
+      '..cccc..', '.c.cc.c.', 'c..cc..c', 'cccccccc',
+      'c..cc..c', 'c..cc..c', '.c.cc.c.', '..cccc..',
+    ], { c: 'currentColor' }),
+    History: PX([
+      'cccccccc', 'cccccccc', '.c.cc.c.', '.c.cc.c.',
+      '.c.cc.c.', '.c.cc.c.', 'cccccccc', 'cccccccc',
+    ], { c: 'currentColor' }),
+    'Food & drink': PX([
+      '........', 'cccccc..', 'cccccccc', 'cccccc.c',
+      'cccccc.c', 'cccccccc', 'cccccc..', '........',
+    ], { c: 'currentColor' }),
   };
 
   // ── state ───────────────────────────────────────────────────────
