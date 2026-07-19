@@ -137,8 +137,9 @@ Traefik handles WebSocket upgrades automatically.
 
 ## Question bank
 
-120 hand-written questions in `questions.js` across six categories: Ukraine,
-Czech Republic, Video games, Movies & TV, Fun facts, and Science & space.
-Each game draws 20 without repeats (at least 4 categories represented), so
-rematches stay fresh. Add your own questions by appending to the exported
-array — `correct` is the index into `choices`.
+205 hand-written questions in `questions.js` across ten categories: Ukraine,
+Czech Republic, Video games, Movies & TV, Fun facts, Science & space, Music,
+World geography, History, and Food & drink, in three difficulty tiers
+(easy / medium / hard). Each game draws 20 without repeats (at least 4
+categories represented), so rematches stay fresh. Add your own questions by
+appending to the exported array — `correct` is the index into `choices`.
