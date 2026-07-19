@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>Duel Trivia</title>
+  <meta name="description" content="Two-player turn-based trivia duel. Create a room, share the link, and battle over 10 rounds.">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800&family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="crt-overlay" aria-hidden="true"></div>
+
+  <main id="app">
+    <!-- ── Landing ─────────────────────────────────── -->
+    <section id="screen-landing" class="screen">
+      <h1 class="logo" aria-label="Duel Trivia">DUEL<span class="logo-accent">TRIVIA</span></h1>
+      <p class="tagline">two players &middot; ten rounds &middot; one winner</p>
+
+      <div class="panel">
+        <label class="field-label" for="name-input">Your name</label>
+        <input id="name-input" class="text-input" type="text" maxlength="20" autocomplete="nickname" placeholder="Player">
+
+        <div id="landing-actions">
+          <button id="btn-create" class="btn btn-primary btn-block">Create game</button>
+          <button id="btn-have-code" class="btn btn-ghost btn-block" aria-expanded="false" aria-controls="code-entry">I have a code</button>
+          <div id="code-entry" hidden>
+            <label class="field-label" for="code-input">Room code</label>
+            <div class="code-row">
+              <input id="code-input" class="text-input code-input" type="text" maxlength="4" autocomplete="off"
+                     autocapitalize="characters" spellcheck="false" placeholder="ABCD">
+              <button id="btn-join-code" class="btn btn-p2">Join</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="landing-join" hidden>
+          <p class="join-invite">Joining room <strong id="join-code-label" class="pixel"></strong></p>
+          <button id="btn-join" class="btn btn-p2 btn-block">Join game</button>
+          <button id="btn-join-cancel" class="btn btn-ghost btn-block">Create a new game instead</button>
+        </div>
+
+        <p id="landing-error" class="error-text" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- ── Lobby ───────────────────────────────────── -->
+    <section id="screen-lobby" class="screen" hidden>
+      <h2 class="screen-title pixel">GAME LOBBY</h2>
+      <div class="panel">
+        <p class="field-label">Room code</p>
+        <p id="lobby-code" class="room-code pixel" aria-live="polite"></p>
+        <div class="lobby-share">
+          <button id="btn-copy" class="btn btn-ghost">Copy link</button>
+          <button id="btn-share" class="btn btn-ghost" hidden>Share</button>
+        </div>
+        <ul id="lobby-players" class="lobby-players" aria-label="Players in room"></ul>
+        <p id="lobby-status" class="lobby-status" aria-live="polite"></p>
+        <button id="btn-start" class="btn btn-primary btn-block" hidden>Start game</button>
+      </div>
+      <p class="hint">Send the link to a friend — the game starts when both of you are in.</p>
+    </section>
+
+    <!-- ── Game ────────────────────────────────────── -->
+    <section id="screen-game" class="screen screen-game" hidden>
+      <header class="scoreboard" aria-label="Scoreboard">
+        <div id="sb-p1" class="sb-player p1">
+          <span class="turn-marker" aria-hidden="true">▸</span>
+          <span class="avatar" aria-hidden="true"></span>
+          <span class="sb-name"></span>
+          <span class="sb-score pixel">0</span>
+        </div>
+        <div class="vs pixel" aria-hidden="true">VS</div>
+        <div id="sb-p2" class="sb-player p2">
+          <span class="turn-marker" aria-hidden="true">▸</span>
+          <span class="avatar" aria-hidden="true"></span>
+          <span class="sb-name"></span>
+          <span class="sb-score pixel">0</span>
+        </div>
+      </header>
+
+      <p id="round-counter" class="round-counter pixel"></p>
+      <p id="turn-banner" class="turn-banner pixel" aria-live="polite"></p>
+
+      <div id="game-card" class="panel game-card">
+        <p id="category-chip" class="category-chip"><span class="cat-icon" aria-hidden="true"></span><span class="cat-name"></span></p>
+        <p id="question-text" class="question-text"></p>
+        <div id="timer" class="timer" role="timer" aria-label="Time remaining">
+          <span class="timer-blocks" aria-hidden="true"></span>
+          <span id="timer-seconds" class="timer-seconds pixel"></span>
+        </div>
+        <div id="answers" class="answers" role="group" aria-label="Answer choices"></div>
+        <p id="reveal-banner" class="reveal-banner" aria-live="polite" hidden></p>
+      </div>
+
+      <p id="game-status" class="game-status" aria-live="polite"></p>
+      <button id="btn-claim" class="btn btn-primary btn-block" hidden>Claim win — opponent left</button>
+    </section>
+
+    <!-- ── Game over ───────────────────────────────── -->
+    <section id="screen-over" class="screen" hidden>
+      <div class="trophy" id="trophy-art" aria-hidden="true"></div>
+      <h2 id="over-title" class="screen-title pixel" aria-live="polite"></h2>
+      <div class="panel">
+        <div id="final-scores" class="final-scores"></div>
+        <h3 class="breakdown-title">Category breakdown</h3>
+        <table class="breakdown" id="breakdown">
+          <thead><tr><th scope="col">Category</th><th scope="col" id="bd-p1"></th><th scope="col" id="bd-p2"></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button id="btn-rematch" class="btn btn-primary btn-block">Rematch</button>
+        <p id="rematch-status" class="lobby-status" aria-live="polite"></p>
+        <button id="btn-new-game" class="btn btn-ghost btn-block">New game</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="confetti-layer" aria-hidden="true"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

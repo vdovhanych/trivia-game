@@ -1,0 +1,15 @@
+services:
+  trivia:
+    build: .
+    container_name: duel-trivia
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    # To run behind an existing reverse proxy instead of publishing the port,
+    # remove `ports:` and attach the service to your proxy network:
+    # networks:
+    #   - proxy
+#
+# networks:
+#   proxy:
+#     external: true

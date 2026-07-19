@@ -1,0 +1,17 @@
+{
+  "name": "duel-trivia",
+  "version": "1.0.0",
+  "description": "Two-player, turn-based trivia duel played in the browser.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
