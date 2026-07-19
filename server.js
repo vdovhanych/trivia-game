@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const QUESTIONS = require('./questions');
+const opentdb = require('./opentdb');
 
 const PORT = process.env.PORT || 3000;
 
@@ -47,10 +48,11 @@ const recentlyServed = new Map(); // question id -> last served timestamp (all r
 // questions — cleared here once the bank is exhausted) and preferring
 // questions that no room has been served recently.
 function pickQuestions(excludeIds = new Set()) {
-  let pool = QUESTIONS.filter((q) => !excludeIds.has(q.id));
+  const bank = QUESTIONS.concat(opentdb.extras());
+  let pool = bank.filter((q) => !excludeIds.has(q.id));
   if (pool.length < TURNS_PER_GAME) {
     excludeIds.clear();
-    pool = [...QUESTIONS];
+    pool = [...bank];
   }
   // Shuffle first so equal timestamps tie-break randomly, then draw from the
   // stalest 3x pool so recently seen questions rarely come straight back.
@@ -457,6 +459,8 @@ setInterval(() => {
     if (hits.every((t) => t < now - 60_000)) createHits.delete(ip);
   }
 }, 60_000).unref();
+
+opentdb.start();
 
 server.listen(PORT, () => {
   console.log(`Duel Trivia listening on http://localhost:${PORT}`);
