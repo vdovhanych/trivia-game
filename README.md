@@ -78,6 +78,41 @@ server {
 }
 ```
 
+### Kubernetes + cloudflared
+
+`k8s/manifest.yaml` contains a Deployment and a ClusterIP Service — no
+persistence, no ingress. Build and push the image, point the manifest at it,
+and apply:
+
+```sh
+docker build -t ghcr.io/vdovhanych/trivia-game:latest .
+docker push ghcr.io/vdovhanych/trivia-game:latest
+kubectl apply -f k8s/manifest.yaml
+```
+
+Then route a hostname to the service in your cloudflared config:
+
+```yaml
+ingress:
+  - hostname: trivia.example.com
+    service: http://duel-trivia.default.svc.cluster.local:80
+  - service: http_status:404
+```
+
+cloudflared proxies WebSockets automatically, so `/ws` needs no extra
+configuration. Keep `replicas: 1` — game state lives in the pod's memory,
+and a second replica would split rooms between pods. A pod restart clears
+all active rooms (players just create a new one).
+
+If your ghcr.io package is private, create a pull secret and uncomment the
+`imagePullSecrets` block in the manifest:
+
+```sh
+kubectl create secret docker-registry ghcr-pull-secret \
+  --docker-server=ghcr.io --docker-username=YOUR_GH_USER \
+  --docker-password=YOUR_GH_TOKEN
+```
+
 ### Traefik (labels)
 
 ```yaml

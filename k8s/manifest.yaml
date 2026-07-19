@@ -1,0 +1,82 @@
+# Duel Trivia — Kubernetes manifest (Deployment + Service).
+#
+# Build and push the image first, e.g.:
+#   docker build -t ghcr.io/vdovhanych/trivia-game:latest .
+#   docker push ghcr.io/vdovhanych/trivia-game:latest
+#
+# Apply with:
+#   kubectl apply -f k8s/manifest.yaml
+#
+# Point your cloudflared ingress at: http://duel-trivia.default.svc.cluster.local:80
+# (adjust namespace if you deploy elsewhere). WebSockets work through
+# cloudflared out of the box, no extra config needed.
+#
+# NOTE: replicas must stay at 1 — all game state lives in the process's
+# memory, so a second replica would split rooms between pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: duel-trivia
+  labels:
+    app: duel-trivia
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # in-memory state: don't run old+new pods side by side
+  selector:
+    matchLabels:
+      app: duel-trivia
+  template:
+    metadata:
+      labels:
+        app: duel-trivia
+    spec:
+      containers:
+        - name: duel-trivia
+          image: ghcr.io/vdovhanych/trivia-game:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      # Uncomment if the ghcr.io package is private:
+      # imagePullSecrets:
+      #   - name: ghcr-pull-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: duel-trivia
+  labels:
+    app: duel-trivia
+spec:
+  type: ClusterIP
+  selector:
+    app: duel-trivia
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
