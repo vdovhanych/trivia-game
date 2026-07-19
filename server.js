@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 const TOTAL_ROUNDS = 10;
 const TURNS_PER_GAME = TOTAL_ROUNDS * 2;
 const TURN_MS = 20_000;
-const REVEAL_MS = 3_000;
+const REVEAL_MS = Number(process.env.REVEAL_MS) || 3_000; // env override for tests
 const CLAIM_AFTER_MS = 2 * 60_000;
 const WAITING_TTL_MS = 30 * 60_000;
 const FINISHED_TTL_MS = 10 * 60_000;
@@ -41,10 +41,25 @@ function makeRoomCode() {
   return null;
 }
 
-function pickQuestions() {
-  const bank = shuffle([...QUESTIONS]);
-  const picked = bank.slice(0, TURNS_PER_GAME);
-  const rest = bank.slice(TURNS_PER_GAME);
+const recentlyServed = new Map(); // question id -> last served timestamp (all rooms)
+
+// Picks 20 questions, avoiding `excludeIds` (a room's already-played
+// questions — cleared here once the bank is exhausted) and preferring
+// questions that no room has been served recently.
+function pickQuestions(excludeIds = new Set()) {
+  let pool = QUESTIONS.filter((q) => !excludeIds.has(q.id));
+  if (pool.length < TURNS_PER_GAME) {
+    excludeIds.clear();
+    pool = [...QUESTIONS];
+  }
+  // Shuffle first so equal timestamps tie-break randomly, then draw from the
+  // stalest 3x pool so recently seen questions rarely come straight back.
+  const stale = shuffle(pool).sort(
+    (a, b) => (recentlyServed.get(a.id) || 0) - (recentlyServed.get(b.id) || 0),
+  );
+  const candidates = shuffle(stale.slice(0, Math.min(stale.length, TURNS_PER_GAME * 3)));
+  const picked = candidates.slice(0, TURNS_PER_GAME);
+  const rest = candidates.slice(TURNS_PER_GAME);
   const cats = new Set(picked.map((q) => q.category));
   // Soft constraint: at least 4 categories represented.
   for (const q of rest) {
@@ -56,6 +71,8 @@ function pickQuestions() {
     picked[picked.findIndex((p) => p.category === biggest)] = q;
     cats.add(q.category);
   }
+  const now = Date.now();
+  for (const q of picked) recentlyServed.set(q.id, now);
   return shuffle(picked);
 }
 
@@ -81,6 +98,7 @@ class Room {
     this.turnTimer = null;
     this.revealTimer = null;
     this.rematchVotes = new Set();
+    this.usedIds = new Set(); // questions this room has already played
     this.claimableBy = null;
     this.createdAt = Date.now();
     this.finishedAt = null;
@@ -212,10 +230,15 @@ class Room {
     if (sender.role !== 'host') return send(sender.ws, { type: 'error', message: 'Only the host can start the game.' });
     if (this.players.length < 2) return send(sender.ws, { type: 'error', message: 'Waiting for a second player.' });
     this.phase = 'playing';
-    this.queue = pickQuestions();
+    this.newQueue();
     this.turnIndex = 0;
     this.broadcastState();
     this.beginTurn();
+  }
+
+  newQueue() {
+    this.queue = pickQuestions(this.usedIds);
+    for (const q of this.queue) this.usedIds.add(q.id);
   }
 
   beginTurn() {
@@ -317,7 +340,7 @@ class Room {
       this.rematchVotes.clear();
       this.phase = 'playing';
       this.finishedAt = null;
-      this.queue = pickQuestions();
+      this.newQueue();
       this.turnIndex = 0;
       this.broadcastState();
       this.beginTurn();
