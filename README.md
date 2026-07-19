@@ -137,7 +137,7 @@ Traefik handles WebSocket upgrades automatically.
 
 ## Question bank
 
-269 hand-written questions in `questions.js` across ten categories: Ukraine,
+319 hand-written questions in `questions.js` across ten categories: Ukraine,
 Czech Republic, Video games, Movies & TV, Fun facts, Science & space, Music,
 World geography, History, and Food & drink, in three difficulty tiers
 (easy / medium / hard). Each game draws 20 with at least 4 categories
@@ -146,3 +146,25 @@ never repeat a question until the entire bank has been played through, and
 new games prefer questions no other room has seen recently. Add your own
 questions by appending to the exported array — `correct` is the index into
 `choices`.
+
+### Open Trivia Database integration
+
+On top of the local bank, the server continuously tops up its question pool
+from the free [Open Trivia Database](https://opentdb.com) (no API key
+needed) — up to 600 extra questions cached in memory, fetched slowly in the
+background (one small batch every 30 s, far below the API's rate limit).
+API questions are mapped onto the existing categories (Film/TV → Movies &
+TV, Science & Nature → Science & space, General Knowledge → Fun facts, …)
+and flow through the same shuffling and anti-repeat logic.
+
+The game never depends on the API: if opentdb.com is unreachable the server
+logs one line, backs off exponentially, and keeps playing from the local
+bank. Configuration:
+
+| Env var | Effect |
+|---|---|
+| `OPENTDB=off` | Disable the integration entirely |
+| `OPENTDB_URL=…` | Override the API base URL (used by tests) |
+
+Questions from the Open Trivia Database are licensed under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
