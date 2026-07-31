@@ -1,8 +1,8 @@
 # Duel Trivia
 
 Two-player, turn-based trivia duel played in the browser. Player 1 creates a
-room and shares a link; Player 2 opens it and the battle begins — 10 rounds,
-20 questions, fastest correct answers win.
+room, picks the rules, and shares a link; Player 2 opens it and the battle
+begins — fastest correct answers win.
 
 - **Backend:** Node.js 22, Express + `ws`, all state in memory (no database)
 - **Frontend:** single-page vanilla JS/CSS, no build step
@@ -28,11 +28,15 @@ node server.js          # listens on :3000 (override with PORT=…)
 
 - Rooms are 4-character codes (`ABCDEFGHJKMNPQRSTUVWXYZ23456789` alphabet)
   created via `POST /api/rooms`; the join link is `https://host/#/room/CODE`.
-- A game is 10 rounds; players alternate turns, one question per turn
-  (20 questions total, no repeats within a game).
-- Each turn has a **server-authoritative 20-second timer**. A correct answer
-  scores 100 points plus a time bonus (`floor(secondsRemaining × 5)`, max
-  +100). Wrong answers and timeouts score 0.
+- Players alternate turns, one question per turn (two questions per round,
+  no repeats within a game).
+- Each turn has a **server-authoritative timer**. A correct answer scores
+  base points for the question's difficulty — 100 easy, 125 medium, 150 hard
+  — plus a time bonus of up to the same amount again, scaled by the fraction
+  of the turn left. Wrong answers and timeouts score 0.
+- If the scores are level at the end, the game goes to **sudden death**:
+  extra rounds, one question each, until somebody pulls ahead (up to 5, after
+  which it is called a draw). The host can switch this off.
 - The waiting player spectates the same question and sees the reveal.
 - Correct answer indexes are never sent to clients before the reveal;
   answer choices are re-shuffled server-side per serve.
@@ -41,6 +45,28 @@ node server.js          # listens on :3000 (override with PORT=…)
   stays disconnected for 2+ minutes mid-game, you can claim the win.
 - Rooms expire automatically (30 min unstarted, 10 min after finishing,
   60 min hard cap). Restarting the server clears all rooms.
+
+## Game settings
+
+The host configures the match in the lobby; the guest sees the choices
+update live. Settings survive a rematch.
+
+| Setting | Choices | Default |
+|---|---|---|
+| Rounds | 3, 5, 10, 15, 20 | 10 |
+| Seconds per question | 10, 15, 20, 30 | 20 |
+| Difficulty | mixed, easy, medium, hard | mixed |
+| Categories | any subset of the ten | all |
+| Tie-breaker | sudden death / allow draw | sudden death |
+
+The server is the only authority on these: unknown values are ignored, only
+the host may change them, and a guest that tries is told so. The lobby shows
+how many questions match the current filters and blocks the start if there
+are fewer than the game needs (20 rounds of hard Music questions, say), so a
+game can never run out of questions mid-match.
+
+Every question shows its difficulty and what it is worth, so both players can
+see why a round swung the way it did.
 
 ## Deploying behind a reverse proxy
 
@@ -140,8 +166,9 @@ Traefik handles WebSocket upgrades automatically.
 319 hand-written questions in `questions.js` across ten categories: Ukraine,
 Czech Republic, Video games, Movies & TV, Fun facts, Science & space, Music,
 World geography, History, and Food & drink, in three difficulty tiers
-(easy / medium / hard). Each game draws 20 with at least 4 categories
-represented. Rooms remember every question they have served, so rematches
+(easy / medium / hard). Each game draws two questions per round from the
+categories and difficulty the host chose, spread over 4 categories where the
+selection allows. Rooms remember every question they have served, so rematches
 never repeat a question until the entire bank has been played through, and
 new games prefer questions no other room has seen recently. Add your own
 questions by appending to the exported array — `correct` is the index into

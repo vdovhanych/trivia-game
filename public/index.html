@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="dark">
   <title>Duel Trivia</title>
-  <meta name="description" content="Two-player turn-based trivia duel. Create a room, share the link, and battle over 10 rounds.">
+  <meta name="description" content="Two-player turn-based trivia duel. Create a room, set the rounds, timer, difficulty and categories, share the link, and battle it out.">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,7 +20,7 @@
     <!-- ── Landing ─────────────────────────────────── -->
     <section id="screen-landing" class="screen">
       <p class="logo" aria-hidden="true">DUEL<span class="logo-accent">TRIVIA</span></p>
-      <p class="tagline">two players &middot; ten rounds &middot; one winner</p>
+      <p class="tagline">two players &middot; your rules &middot; one winner</p>
 
       <div class="panel">
         <label class="field-label" for="name-input">Your name</label>
@@ -60,6 +60,41 @@
           <button id="btn-share" class="btn btn-ghost" hidden>Share</button>
         </div>
         <ul id="lobby-players" class="lobby-players" aria-label="Players in room"></ul>
+
+        <section class="settings" aria-labelledby="settings-heading">
+          <p class="field-label" id="settings-heading">Game settings</p>
+
+          <div id="settings-host" hidden>
+            <div class="setting">
+              <label class="setting-label" id="lbl-rounds">Rounds</label>
+              <div class="seg" id="set-rounds" role="group" aria-labelledby="lbl-rounds"></div>
+            </div>
+            <div class="setting">
+              <label class="setting-label" id="lbl-seconds">Seconds per question</label>
+              <div class="seg" id="set-seconds" role="group" aria-labelledby="lbl-seconds"></div>
+            </div>
+            <div class="setting">
+              <label class="setting-label" id="lbl-difficulty">Difficulty</label>
+              <div class="seg" id="set-difficulty" role="group" aria-labelledby="lbl-difficulty"></div>
+            </div>
+            <div class="setting">
+              <label class="setting-label" id="lbl-sudden">Tie-breaker</label>
+              <div class="seg" id="set-sudden" role="group" aria-labelledby="lbl-sudden"></div>
+            </div>
+            <details class="cat-picker">
+              <summary><span class="setting-label">Categories</span> <span id="cat-summary" class="cat-summary"></span></summary>
+              <div id="set-categories" class="cat-grid" role="group" aria-label="Categories in play"></div>
+              <div class="cat-bulk">
+                <button id="btn-cats-all" type="button" class="btn btn-ghost btn-tiny">Select all</button>
+                <button id="btn-cats-none" type="button" class="btn btn-ghost btn-tiny">Clear</button>
+              </div>
+            </details>
+          </div>
+
+          <p id="settings-summary" class="settings-summary"></p>
+          <p id="pool-note" class="pool-note" aria-live="polite"></p>
+        </section>
+
         <p id="lobby-status" class="lobby-status" aria-live="polite"></p>
         <button id="btn-start" class="btn btn-primary btn-block" hidden>Start game</button>
       </div>
@@ -88,7 +123,10 @@
       <p id="turn-banner" class="turn-banner pixel" aria-live="polite"></p>
 
       <div id="game-card" class="panel game-card">
-        <p id="category-chip" class="category-chip"><span class="cat-icon" aria-hidden="true"></span><span class="cat-name"></span></p>
+        <p class="question-meta">
+          <span id="category-chip" class="category-chip"><span class="cat-icon" aria-hidden="true"></span><span class="cat-name"></span></span>
+          <span id="difficulty-chip" class="difficulty-chip"></span>
+        </p>
         <p id="question-text" class="question-text"></p>
         <div id="timer" class="timer" role="timer" aria-label="Time remaining">
           <span class="timer-blocks" aria-hidden="true"></span>
@@ -108,6 +146,7 @@
       <h2 id="over-title" class="screen-title pixel" aria-live="polite"></h2>
       <div class="panel">
         <div id="final-scores" class="final-scores"></div>
+        <p id="over-settings" class="settings-summary"></p>
         <h3 class="breakdown-title">Category breakdown</h3>
         <table class="breakdown" id="breakdown">
           <thead><tr><th scope="col">Category</th><th scope="col" id="bd-p1"></th><th scope="col" id="bd-p2"></th></tr></thead>

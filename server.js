@@ -10,9 +10,6 @@ const opentdb = require('./opentdb');
 
 const PORT = process.env.PORT || 3000;
 
-const TOTAL_ROUNDS = 10;
-const TURNS_PER_GAME = TOTAL_ROUNDS * 2;
-const TURN_MS = 20_000;
 const REVEAL_MS = Number(process.env.REVEAL_MS) || 3_000; // env override for tests
 const CLAIM_AFTER_MS = 2 * 60_000;
 const WAITING_TTL_MS = 30 * 60_000;
@@ -20,6 +17,55 @@ const FINISHED_TTL_MS = 10 * 60_000;
 const HARD_TTL_MS = 60 * 60_000;
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+// ── game settings ─────────────────────────────────────────────────
+// The host picks these in the lobby; the server is the only authority on
+// them, so a tampered client can never widen the allowed values.
+
+const ROUND_CHOICES = [3, 5, 10, 15, 20];
+const SECONDS_CHOICES = [10, 15, 20, 30];
+const DIFFICULTY_CHOICES = ['mixed', 'easy', 'medium', 'hard'];
+const CATEGORY_CHOICES = [...new Set(QUESTIONS.map((q) => q.category))];
+
+// Base points per question; the time bonus can double them.
+const BASE_POINTS = { easy: 100, medium: 125, hard: 150 };
+
+// A tied game plays extra rounds until someone pulls ahead, but not forever.
+const MAX_SUDDEN_DEATH_ROUNDS = 5;
+
+const DEFAULT_SETTINGS = Object.freeze({
+  rounds: 10,
+  seconds: 20,
+  difficulty: 'mixed',
+  categories: [], // empty = every category
+  suddenDeath: true,
+});
+
+// Returns a fresh, fully valid settings object: anything unrecognised in
+// `input` falls back to the corresponding value in `current`.
+function normalizeSettings(input, current = DEFAULT_SETTINGS) {
+  const next = { ...current };
+  if (!input || typeof input !== 'object') return next;
+  if (ROUND_CHOICES.includes(input.rounds)) next.rounds = input.rounds;
+  if (SECONDS_CHOICES.includes(input.seconds)) next.seconds = input.seconds;
+  if (DIFFICULTY_CHOICES.includes(input.difficulty)) next.difficulty = input.difficulty;
+  if (typeof input.suddenDeath === 'boolean') next.suddenDeath = input.suddenDeath;
+  if (Array.isArray(input.categories)) {
+    const picked = CATEGORY_CHOICES.filter((c) => input.categories.includes(c));
+    // "all selected" and "none selected" both mean the unrestricted pool.
+    next.categories = picked.length === CATEGORY_CHOICES.length ? [] : picked;
+  }
+  return next;
+}
+
+function settingsOptions() {
+  return {
+    rounds: ROUND_CHOICES,
+    seconds: SECONDS_CHOICES,
+    difficulties: DIFFICULTY_CHOICES,
+    categories: CATEGORY_CHOICES,
+  };
+}
 
 const rooms = new Map(); // code -> Room
 
@@ -44,28 +90,49 @@ function makeRoomCode() {
 
 const recentlyServed = new Map(); // question id -> last served timestamp (all rooms)
 
-// Picks 20 questions, avoiding `excludeIds` (a room's already-played
-// questions — cleared here once the bank is exhausted) and preferring
-// questions that no room has been served recently.
-function pickQuestions(excludeIds = new Set()) {
-  const bank = QUESTIONS.concat(opentdb.extras());
+function fullBank() {
+  return QUESTIONS.concat(opentdb.extras());
+}
+
+// Every question allowed by the room's difficulty and category filters.
+function matchingQuestions(settings) {
+  const cats = settings.categories.length ? new Set(settings.categories) : null;
+  return fullBank().filter(
+    (q) => (!cats || cats.has(q.category))
+      && (settings.difficulty === 'mixed' || q.difficulty === settings.difficulty),
+  );
+}
+
+// Picks `count` questions matching the room's settings, avoiding `excludeIds`
+// (a room's already-played questions — cleared here once its pool is
+// exhausted) and preferring questions that no room has been served recently.
+function pickQuestions(settings, count, excludeIds = new Set()) {
+  const bank = matchingQuestions(settings);
   let pool = bank.filter((q) => !excludeIds.has(q.id));
-  if (pool.length < TURNS_PER_GAME) {
+  if (pool.length < count) {
     excludeIds.clear();
     pool = [...bank];
+  }
+  if (pool.length < count) {
+    // The filters are too narrow to fill the game. The lobby stops the host
+    // getting here, so this is only a safety net: top up from the full bank.
+    const seen = new Set(pool.map((q) => q.id));
+    for (const q of fullBank()) if (!seen.has(q.id)) pool.push(q);
   }
   // Shuffle first so equal timestamps tie-break randomly, then draw from the
   // stalest 3x pool so recently seen questions rarely come straight back.
   const stale = shuffle(pool).sort(
     (a, b) => (recentlyServed.get(a.id) || 0) - (recentlyServed.get(b.id) || 0),
   );
-  const candidates = shuffle(stale.slice(0, Math.min(stale.length, TURNS_PER_GAME * 3)));
-  const picked = candidates.slice(0, TURNS_PER_GAME);
-  const rest = candidates.slice(TURNS_PER_GAME);
+  const candidates = shuffle(stale.slice(0, Math.min(stale.length, count * 3)));
+  const picked = candidates.slice(0, count);
+  const rest = candidates.slice(count);
   const cats = new Set(picked.map((q) => q.category));
-  // Soft constraint: at least 4 categories represented.
+  // Soft constraint: spread over 4 categories, or as many as the settings and
+  // the game length allow.
+  const wanted = Math.min(4, count, new Set(candidates.map((q) => q.category)).size);
   for (const q of rest) {
-    if (cats.size >= 4) break;
+    if (cats.size >= wanted) break;
     if (cats.has(q.category)) continue;
     const counts = new Map();
     for (const p of picked) counts.set(p.category, (counts.get(p.category) || 0) + 1);
@@ -104,10 +171,20 @@ class Room {
     this.claimableBy = null;
     this.createdAt = Date.now();
     this.finishedAt = null;
+    this.settings = { ...DEFAULT_SETTINGS };
+    this.extraRounds = 0; // sudden-death rounds added on top of settings.rounds
   }
 
   get activePlayer() {
     return this.players[this.turnIndex % 2] || null;
+  }
+
+  get totalTurns() {
+    return (this.settings.rounds + this.extraRounds) * 2;
+  }
+
+  get turnMs() {
+    return this.settings.seconds * 1000;
   }
 
   otherPlayer(player) {
@@ -115,16 +192,25 @@ class Room {
   }
 
   snapshot() {
+    const round = Math.min(
+      Math.floor(this.turnIndex / 2) + 1,
+      this.settings.rounds + this.extraRounds,
+    );
     return {
       phase: this.phase,
       players: this.players.map((p) => ({
         id: p.id, name: p.name, role: p.role, score: p.score, connected: p.connected,
       })),
-      round: Math.min(Math.floor(this.turnIndex / 2) + 1, TOTAL_ROUNDS),
-      totalRounds: TOTAL_ROUNDS,
+      round,
+      totalRounds: this.settings.rounds,
+      // >0 while a tied game is running on into sudden death.
+      suddenDeathRound: Math.max(0, round - this.settings.rounds),
       activePlayerId: this.phase === 'playing' ? this.activePlayer?.id ?? null : null,
       rematchVotes: [...this.rematchVotes],
       claimableBy: this.claimableBy,
+      settings: this.settings,
+      // Only the lobby needs the live pool size, and it costs a bank scan.
+      questionsAvailable: this.phase === 'waiting' ? matchingQuestions(this.settings).length : null,
     };
   }
 
@@ -143,8 +229,15 @@ class Room {
       round: Math.floor(this.turnIndex / 2) + 1,
       turn: this.turnIndex + 1,
       turnPlayerId: this.activePlayer.id,
-      question: { text: q.text, choices, category: q.category },
+      question: {
+        text: q.text,
+        choices,
+        category: q.category,
+        difficulty: q.difficulty,
+        points: BASE_POINTS[q.difficulty] ?? BASE_POINTS.medium,
+      },
       deadlineTs: deadline,
+      durationMs: this.turnMs,
     };
   }
 
@@ -178,7 +271,7 @@ class Room {
     this.players.push(player);
     ws.player = player;
     ws.room = this;
-    send(ws, { type: 'joined', playerId: player.id, role, roomCode: this.code, ...this.snapshot() });
+    send(ws, { type: 'joined', playerId: player.id, role, roomCode: this.code, options: settingsOptions(), ...this.snapshot() });
     this.broadcastState();
   }
 
@@ -194,7 +287,7 @@ class Room {
     if (this.claimableBy && this.claimableBy === this.otherPlayer(player)?.id) this.claimableBy = null;
     ws.player = player;
     ws.room = this;
-    send(ws, { type: 'joined', playerId: player.id, role: player.role, roomCode: this.code, ...this.snapshot() });
+    send(ws, { type: 'joined', playerId: player.id, role: player.role, roomCode: this.code, options: settingsOptions(), ...this.snapshot() });
     if (wasDisconnected) {
       const other = this.otherPlayer(player);
       if (other) send(other.ws, { type: 'opponent_reconnected' });
@@ -226,12 +319,28 @@ class Room {
     this.broadcastState();
   }
 
+  // ── settings ──
+  updateSettings(sender, input) {
+    if (this.phase !== 'waiting') return;
+    if (sender.role !== 'host') return send(sender.ws, { type: 'error', message: 'Only the host can change the settings.' });
+    this.settings = normalizeSettings(input, this.settings);
+    this.broadcastState();
+  }
+
   // ── game flow ──
   start(sender) {
     if (this.phase !== 'waiting') return send(sender.ws, { type: 'error', message: 'Game already started.' });
     if (sender.role !== 'host') return send(sender.ws, { type: 'error', message: 'Only the host can start the game.' });
     if (this.players.length < 2) return send(sender.ws, { type: 'error', message: 'Waiting for a second player.' });
+    const available = matchingQuestions(this.settings).length;
+    if (available < this.settings.rounds * 2) {
+      return send(sender.ws, {
+        type: 'error',
+        message: `Only ${available} questions match those settings — ${this.settings.rounds * 2} are needed. Pick fewer rounds or more categories.`,
+      });
+    }
     this.phase = 'playing';
+    this.extraRounds = 0;
     this.newQueue();
     this.turnIndex = 0;
     this.broadcastState();
@@ -239,7 +348,7 @@ class Room {
   }
 
   newQueue() {
-    this.queue = pickQuestions(this.usedIds);
+    this.queue = pickQuestions(this.settings, this.settings.rounds * 2, this.usedIds);
     for (const q of this.queue) this.usedIds.add(q.id);
   }
 
@@ -250,12 +359,12 @@ class Room {
       q,
       choices: order.map((i) => q.choices[i]),
       correctIndex: order.indexOf(q.correct),
-      deadline: Date.now() + TURN_MS,
+      deadline: Date.now() + this.turnMs,
       resolved: false,
     };
     this.broadcastState();
     this.broadcast(this.questionMessage());
-    this.turnTimer = setTimeout(() => this.resolveTurn(null), TURN_MS + 150);
+    this.turnTimer = setTimeout(() => this.resolveTurn(null), this.turnMs + 150);
   }
 
   answer(sender, choiceIndex) {
@@ -277,8 +386,11 @@ class Room {
     const isCorrect = pickedIndex === correctIndex;
     let scoreDelta = 0;
     if (isCorrect) {
-      const secondsRemaining = Math.max(0, (deadline - Date.now()) / 1000);
-      scoreDelta = 100 + Math.min(100, Math.floor(secondsRemaining * 5));
+      // Harder questions are worth more, and the time bonus scales with the
+      // turn length so a slower timer isn't simply more generous.
+      const base = BASE_POINTS[q.difficulty] ?? BASE_POINTS.medium;
+      const remaining = Math.max(0, deadline - Date.now());
+      scoreDelta = base + Math.floor((base * remaining) / this.turnMs);
       player.score += scoreDelta;
     }
     const stat = player.stats[q.category] || (player.stats[q.category] = { correct: 0, total: 0 });
@@ -298,9 +410,29 @@ class Room {
       this.revealTimer = null;
       this.turnIndex += 1;
       this.current = null;
-      if (this.turnIndex >= TURNS_PER_GAME) this.finishGame(null);
-      else this.beginTurn();
+      if (this.turnIndex < this.totalTurns) this.beginTurn();
+      else if (this.wantsSuddenDeath()) this.beginSuddenDeathRound();
+      else this.finishGame(null);
     }, REVEAL_MS);
+  }
+
+  // A tie at the final whistle earns both players one more round each — up to
+  // MAX_SUDDEN_DEATH_ROUNDS, after which the game is allowed to end a draw.
+  wantsSuddenDeath() {
+    const [a, b] = this.players;
+    return this.settings.suddenDeath
+      && this.extraRounds < MAX_SUDDEN_DEATH_ROUNDS
+      && Boolean(a && b)
+      && a.score === b.score;
+  }
+
+  beginSuddenDeathRound() {
+    this.extraRounds += 1;
+    const extra = pickQuestions(this.settings, 2, this.usedIds);
+    for (const q of extra) this.usedIds.add(q.id);
+    this.queue.push(...extra);
+    this.broadcast({ type: 'sudden_death', round: this.extraRounds });
+    this.beginTurn();
   }
 
   finishGame(forcedWinnerId) {
@@ -324,6 +456,8 @@ class Room {
       forfeit: Boolean(forcedWinnerId),
       scores: Object.fromEntries(this.players.map((p) => [p.id, p.score])),
       breakdown: Object.fromEntries(this.players.map((p) => [p.id, p.stats])),
+      settings: this.settings,
+      suddenDeathRounds: this.extraRounds,
     };
     this.broadcast(this.gameoverMsg);
     this.broadcastState();
@@ -342,6 +476,7 @@ class Room {
       this.rematchVotes.clear();
       this.phase = 'playing';
       this.finishedAt = null;
+      this.extraRounds = 0;
       this.newQueue();
       this.turnIndex = 0;
       this.broadcastState();
@@ -421,6 +556,7 @@ wss.on('connection', (ws, req) => {
     const player = ws.player;
     if (!room || !player) return;
     switch (msg.type) {
+      case 'settings': return room.updateSettings(player, msg.settings);
       case 'start': return room.start(player);
       case 'answer': return room.answer(player, msg.choiceIndex);
       case 'rematch': return room.rematch(player);

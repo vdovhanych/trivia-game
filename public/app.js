@@ -104,6 +104,7 @@
 
   let ws = null;
   let roomCode = null;
+  let options = null;        // allowed setting values, from the `joined` message
   let snapshot = null;       // latest `state` message
   let question = null;       // latest `question` message
   let reveal = null;         // latest `reveal` message (cleared on next question)
@@ -197,6 +198,7 @@
       case 'joined':
         store.playerId = msg.playerId;
         localStorage.setItem('duel_pid', store.playerId);
+        options = msg.options || options;
         snapshot = msg;
         render();
         break;
@@ -221,6 +223,11 @@
         question = null;
         reveal = null;
         render();
+        break;
+      case 'sudden_death':
+        toast(msg.round === 1
+          ? 'Scores level — SUDDEN DEATH!'
+          : `Still level — sudden death round ${msg.round}!`, 4000);
         break;
       case 'opponent_left':
         toast('Your opponent disconnected…');
@@ -268,6 +275,125 @@
     return index === 0 ? AVATAR_P1 : AVATAR_P2;
   }
 
+  // ── settings ────────────────────────────────────────────────────
+  const DIFFICULTY_LABELS = { mixed: 'Mixed', easy: 'Easy', medium: 'Medium', hard: 'Hard' };
+
+  function settingsSummary(s) {
+    const cats = s.categories.length === 0
+      ? 'all categories'
+      : s.categories.length === 1
+        ? s.categories[0].toLowerCase()
+        : `${s.categories.length} categories`;
+    const diff = s.difficulty === 'mixed' ? 'mixed difficulty' : `${s.difficulty} questions only`;
+    return `${s.rounds} rounds · ${s.seconds}s per question · ${diff} · ${cats}`
+      + ` · sudden death ${s.suddenDeath ? 'on' : 'off'}`;
+  }
+
+  function sendSettings(patch) {
+    if (!snapshot?.settings) return;
+    sendMsg({ type: 'settings', settings: { ...snapshot.settings, ...patch } });
+  }
+
+  // Builds a row of toggle buttons once; `markSeg` keeps them in sync after.
+  function buildSeg(el, items, onPick) {
+    el.innerHTML = '';
+    for (const item of items) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'seg-btn';
+      btn.textContent = item.label;
+      btn.dataset.value = JSON.stringify(item.value);
+      btn.setAttribute('aria-pressed', 'false');
+      btn.addEventListener('click', () => onPick(item.value));
+      el.appendChild(btn);
+    }
+  }
+
+  function markSeg(el, value) {
+    const want = JSON.stringify(value);
+    for (const btn of el.children) btn.setAttribute('aria-pressed', String(btn.dataset.value === want));
+  }
+
+  function buildSettingsControls() {
+    if (!options || $('#settings-host').dataset.built) return;
+    $('#settings-host').dataset.built = '1';
+
+    buildSeg($('#set-rounds'), options.rounds.map((r) => ({ label: String(r), value: r })),
+      (rounds) => sendSettings({ rounds }));
+    buildSeg($('#set-seconds'), options.seconds.map((s) => ({ label: `${s}s`, value: s })),
+      (seconds) => sendSettings({ seconds }));
+    buildSeg($('#set-difficulty'), options.difficulties.map((d) => ({ label: DIFFICULTY_LABELS[d] || d, value: d })),
+      (difficulty) => sendSettings({ difficulty }));
+    buildSeg($('#set-sudden'), [{ label: 'Sudden death', value: true }, { label: 'Allow draw', value: false }],
+      (suddenDeath) => sendSettings({ suddenDeath }));
+
+    const grid = $('#set-categories');
+    grid.innerHTML = '';
+    for (const cat of options.categories) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cat-toggle';
+      btn.dataset.cat = cat;
+      const icon = document.createElement('span');
+      icon.className = 'cat-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = ICONS[cat] || '';
+      btn.append(icon, document.createTextNode(cat));
+      btn.addEventListener('click', () => toggleCategory(cat));
+      grid.appendChild(btn);
+    }
+    $('#btn-cats-all').addEventListener('click', () => sendSettings({ categories: [] }));
+    $('#btn-cats-none').addEventListener('click', () => {
+      // An empty list means "everything", so clearing keeps one category on.
+      sendSettings({ categories: [options.categories[0]] });
+    });
+  }
+
+  function toggleCategory(cat) {
+    const s = snapshot?.settings;
+    if (!s) return;
+    const selected = s.categories.length ? [...s.categories] : [...options.categories];
+    const at = selected.indexOf(cat);
+    if (at === -1) selected.push(cat);
+    else if (selected.length > 1) selected.splice(at, 1);
+    else return; // never leave the game with zero categories
+    sendSettings({ categories: selected });
+  }
+
+  function renderSettings() {
+    const s = snapshot.settings;
+    const iAmHost = me()?.role === 'host';
+    buildSettingsControls();
+    $('#settings-host').hidden = !iAmHost || !options;
+
+    if (iAmHost && options) {
+      markSeg($('#set-rounds'), s.rounds);
+      markSeg($('#set-seconds'), s.seconds);
+      markSeg($('#set-difficulty'), s.difficulty);
+      markSeg($('#set-sudden'), s.suddenDeath);
+      const on = s.categories.length ? new Set(s.categories) : new Set(options.categories);
+      for (const btn of $('#set-categories').children) {
+        btn.setAttribute('aria-pressed', String(on.has(btn.dataset.cat)));
+      }
+      $('#cat-summary').textContent = s.categories.length
+        ? `${s.categories.length}/${options.categories.length}`
+        : 'all';
+    }
+
+    $('#settings-summary').textContent = iAmHost ? '' : settingsSummary(s);
+    $('#settings-summary').hidden = iAmHost;
+
+    const needed = s.rounds * 2;
+    const available = snapshot.questionsAvailable ?? needed;
+    const note = $('#pool-note');
+    const enough = available >= needed;
+    note.textContent = enough
+      ? `${available} questions match — ${needed} will be played.`
+      : `Only ${available} questions match these settings, but ${needed} are needed.`;
+    note.classList.toggle('warn', !enough);
+    return enough;
+  }
+
   function renderLobby() {
     showScreen('screen-lobby');
     $('#lobby-code').textContent = roomCode;
@@ -292,13 +418,16 @@
       list.appendChild(li);
     }
 
+    const enoughQuestions = renderSettings();
     const iAmHost = me()?.role === 'host';
     const ready = snapshot.players.length === 2;
     $('#btn-start').hidden = !iAmHost;
-    $('#btn-start').disabled = !ready;
+    $('#btn-start').disabled = !ready || !enoughQuestions;
     const status = $('#lobby-status');
     if (!ready) {
       status.innerHTML = 'waiting for player 2<span class="cursor">▌</span>';
+    } else if (iAmHost && !enoughQuestions) {
+      status.textContent = 'Widen the categories or shorten the game to start.';
     } else if (iAmHost) {
       status.textContent = 'Both players are in — hit Start!';
     } else {
@@ -347,7 +476,12 @@
     showScreen('screen-game');
     renderScoreboard();
     $('#btn-claim').hidden = snapshot.claimableBy !== store.playerId;
-    $('#round-counter').textContent = `ROUND ${snapshot.round}/${snapshot.totalRounds}`;
+    const counter = $('#round-counter');
+    const sudden = snapshot.suddenDeathRound > 0;
+    counter.textContent = sudden
+      ? `SUDDEN DEATH · ROUND ${snapshot.suddenDeathRound}`
+      : `ROUND ${snapshot.round}/${snapshot.totalRounds}`;
+    counter.classList.toggle('sudden', sudden);
 
     const banner = $('#turn-banner');
     if (isMyTurn()) {
@@ -360,10 +494,18 @@
 
     if (!question) return;
 
-    // category chip
+    // category + difficulty chips
     const chip = $('#category-chip');
     chip.querySelector('.cat-icon').innerHTML = ICONS[question.question.category] || '';
     chip.querySelector('.cat-name').textContent = question.question.category;
+
+    const diff = question.question.difficulty;
+    const diffChip = $('#difficulty-chip');
+    diffChip.hidden = !diff;
+    if (diff) {
+      diffChip.textContent = `${DIFFICULTY_LABELS[diff] || diff} · ${question.question.points} pts`;
+      diffChip.className = `difficulty-chip ${diff}`;
+    }
 
     $('#question-text').textContent = question.question.text;
 
@@ -480,20 +622,25 @@
   }
 
   // ── timer ───────────────────────────────────────────────────────
+  const TIMER_BLOCKS = 20;
+
   function renderTimer() {
     const blocksWrap = $('.timer-blocks');
-    if (blocksWrap.children.length !== 20) {
+    if (blocksWrap.children.length !== TIMER_BLOCKS) {
       blocksWrap.innerHTML = '';
-      for (let i = 0; i < 20; i++) blocksWrap.appendChild(document.createElement('i'));
+      for (let i = 0; i < TIMER_BLOCKS; i++) blocksWrap.appendChild(document.createElement('i'));
     }
     clearInterval(timerInterval);
     const update = () => {
       const remaining = reveal ? 0 : Math.max(0, (question?.deadlineTs ?? 0) - Date.now());
       const secs = Math.ceil(remaining / 1000);
-      const lit = Math.min(20, secs);
+      // The bar always spans the whole turn, however long the host made it.
+      const duration = question?.durationMs || 20_000;
+      const lit = Math.ceil((remaining / duration) * TIMER_BLOCKS);
       [...blocksWrap.children].forEach((b, i) => b.classList.toggle('off', i >= lit));
       $('#timer-seconds').textContent = `${secs}s`;
-      $('#timer').classList.toggle('danger', !reveal && secs > 0 && secs <= 5);
+      const dangerAt = Math.min(5000, duration * 0.3);
+      $('#timer').classList.toggle('danger', !reveal && remaining > 0 && remaining <= dangerAt);
       if (remaining <= 0) clearInterval(timerInterval);
     };
     update();
@@ -505,7 +652,6 @@
     showScreen('screen-over');
     clearInterval(timerInterval);
 
-    const meP = me();
     const win = gameover.winnerId;
     const title = $('#over-title');
     if (!win) title.textContent = 'DRAW!';
@@ -532,6 +678,12 @@
       row.append(name, score);
       scoresWrap.appendChild(row);
     });
+
+    const overSettings = $('#over-settings');
+    const played = gameover.settings ? settingsSummary(gameover.settings) : '';
+    overSettings.textContent = gameover.suddenDeathRounds
+      ? `${played} · decided after ${gameover.suddenDeathRounds} sudden-death round${gameover.suddenDeathRounds > 1 ? 's' : ''}`
+      : played;
 
     // category breakdown
     const [a, b] = snapshot.players;
