@@ -100,6 +100,27 @@
     playerId: localStorage.getItem('duel_pid') || crypto.randomUUID(),
     name: localStorage.getItem('duel_name') || '',
   };
+  let soundEnabled = localStorage.getItem('duel_sound') === 'on';
+  let audioContext = null;
+  function playSound(correct) {
+    if (!soundEnabled) return;
+    try {
+      audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+      audioContext.resume().catch(() => {});
+      (correct ? [523, 659, 784] : [220, 165]).forEach((frequency, i) => {
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        const start = audioContext.currentTime + i * 0.09;
+        oscillator.type = 'square';
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.035, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
+        oscillator.connect(gain).connect(audioContext.destination);
+        oscillator.start(start);
+        oscillator.stop(start + 0.13);
+      });
+    } catch { /* Sound is optional on browsers without Web Audio. */ }
+  }
   localStorage.setItem('duel_pid', store.playerId);
 
   let ws = null;
@@ -124,7 +145,9 @@
   const isMyTurn = () => snapshot?.activePlayerId === store.playerId;
 
   function showScreen(id) {
+    const changed = $(`#${id}`).hidden;
     for (const s of document.querySelectorAll('.screen')) s.hidden = s.id !== id;
+    if (changed) window.scrollTo(0, 0);
   }
 
   let toastTimer = null;
@@ -150,8 +173,10 @@
     intentionalClose = false;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws?room=${encodeURIComponent(roomCode)}`);
+    const connection = ws;
 
     ws.addEventListener('open', () => {
+      if (ws !== connection) return;
       reconnectAttempts = 0;
       sendMsg({ type: 'join', name: store.name, playerId: store.playerId });
       clearInterval(pingInterval);
@@ -159,12 +184,14 @@
     });
 
     ws.addEventListener('message', (ev) => {
+      if (ws !== connection) return;
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       handleMessage(msg);
     });
 
     ws.addEventListener('close', (ev) => {
+      if (ws !== connection) return;
       clearInterval(pingInterval);
       if (intentionalClose || [4001, 4002, 4004].includes(ev.code)) return;
       if (ev.code === 4000) return showLandingError('This game was opened in another tab or window.');
@@ -184,6 +211,7 @@
     intentionalClose = true;
     clearTimeout(reconnectTimer);
     clearInterval(pingInterval);
+    clearInterval(timerInterval);
     if (ws) try { ws.close(); } catch { /* ignore */ }
     ws = null;
     roomCode = null;
@@ -206,6 +234,10 @@
         render();
         break;
       case 'question':
+        if (question?.matchId !== msg.matchId || question?.turn !== msg.turn) {
+          delete $('#answers').dataset.turn;
+          delete $('#reveal-banner').dataset.done;
+        }
         question = msg;
         reveal = null;
         gameover = null;
@@ -214,6 +246,10 @@
         break;
       case 'reveal':
         reveal = msg;
+        render();
+        break;
+      case 'lifeline':
+        if (question) question.eliminated = msg.eliminated;
         render();
         break;
       case 'gameover':
@@ -293,7 +329,7 @@
     }
 
     const iAmHost = me()?.role === 'host';
-    const ready = snapshot.players.length === 2;
+    const ready = snapshot.players.length === 2 && snapshot.players.every((p) => p.connected);
     $('#btn-start').hidden = !iAmHost;
     $('#btn-start').disabled = !ready;
     const status = $('#lobby-status');
@@ -348,6 +384,9 @@
     renderScoreboard();
     $('#btn-claim').hidden = snapshot.claimableBy !== store.playerId;
     $('#round-counter').textContent = `ROUND ${snapshot.round}/${snapshot.totalRounds}`;
+    const completed = question ? question.turn - (reveal ? 0 : 1) : 0;
+    $('#match-progress').setAttribute('aria-valuenow', String(completed));
+    $('#match-progress span').style.width = `${completed / (snapshot.totalRounds * 2) * 100}%`;
 
     const banner = $('#turn-banner');
     if (isMyTurn()) {
@@ -364,6 +403,13 @@
     const chip = $('#category-chip');
     chip.querySelector('.cat-icon').innerHTML = ICONS[question.question.category] || '';
     chip.querySelector('.cat-name').textContent = question.question.category;
+    $('#difficulty-chip').textContent = question.question.difficulty || 'mixed';
+    $('#difficulty-chip').dataset.level = question.question.difficulty || 'medium';
+    const lifeline = $('#btn-lifeline');
+    lifeline.disabled = !isMyTurn() || me()?.lifelineUsed || Boolean(reveal) || myAnswer !== null;
+    lifeline.innerHTML = me()?.lifelineUsed ? '50:50 <span>Used this match</span>' : '50:50 <span>Remove two</span>';
+    const streak = me()?.streak || 0;
+    $('#streak-label').textContent = streak > 0 ? `🔥 ${streak} correct in a row` : 'Your next streak starts here';
 
     $('#question-text').textContent = question.question.text;
 
@@ -404,7 +450,9 @@
 
     const buttons = [...wrap.querySelectorAll('.answer')];
     buttons.forEach((btn, i) => {
-      btn.disabled = spectating || myAnswer !== null || Boolean(reveal);
+      const eliminated = !reveal && question.eliminated?.includes(i);
+      btn.classList.toggle('eliminated', Boolean(eliminated));
+      btn.disabled = spectating || myAnswer !== null || Boolean(reveal) || Boolean(eliminated);
       btn.classList.toggle('picked', !reveal && myAnswer === i);
       if (reveal) {
         const correct = i === reveal.correctIndex;
@@ -419,10 +467,13 @@
   }
 
   function pickAnswer(i) {
-    if (!isMyTurn() || myAnswer !== null || reveal) return;
+    if (!isMyTurn() || myAnswer !== null || reveal || !question || question.eliminated?.includes(i)) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return toast('Reconnecting — try again when connected.');
+    if (Date.now() >= question.deadlineTs) return;
     myAnswer = i;
     sendMsg({ type: 'answer', choiceIndex: i });
     renderAnswers();
+    $('#btn-lifeline').disabled = true;
   }
 
   function renderRevealBits() {
@@ -440,7 +491,7 @@
       banner.textContent = `⏰ Time’s up! ${who} scored 0.`;
       banner.className = 'reveal-banner bad';
     } else if (correct) {
-      banner.textContent = `✔ Correct! ${who} scored +${reveal.scoreDelta}.`;
+      banner.textContent = `✔ Correct! ${who} scored +${reveal.scoreDelta}.${reveal.streakBonus ? ` Includes +${reveal.streakBonus} streak bonus!` : ''}`;
       banner.className = 'reveal-banner good';
     } else {
       banner.textContent = `✘ Wrong answer — ${who} scored 0.`;
@@ -450,6 +501,7 @@
     // fire effects once per reveal
     if (!banner.dataset.done || banner.dataset.done !== `${question?.turn}`) {
       banner.dataset.done = `${question?.turn}`;
+      if (mine) playSound(correct);
       if (mine && !reducedMotion.matches) {
         if (correct) confettiBurst();
         else if (reveal.pickedIndex !== null) {
@@ -505,7 +557,6 @@
     showScreen('screen-over');
     clearInterval(timerInterval);
 
-    const meP = me();
     const win = gameover.winnerId;
     const title = $('#over-title');
     if (!win) title.textContent = 'DRAW!';
@@ -532,6 +583,40 @@
       row.append(name, score);
       scoresWrap.appendChild(row);
     });
+
+    const ownAnswers = (gameover.history || []).filter((answer) => answer.playerId === store.playerId);
+    const correctCount = ownAnswers.filter((answer) => answer.correct).length;
+    const accuracy = ownAnswers.length ? Math.round(correctCount / ownAnswers.length * 100) : 0;
+    $('#match-stats').innerHTML = '';
+    for (const [value, label] of [[`${accuracy}%`, 'Accuracy'], [String(me()?.bestStreak || 0), 'Best streak'], [`${correctCount}/${ownAnswers.length}`, 'Correct']]) {
+      const stat = document.createElement('div');
+      const number = document.createElement('strong');
+      number.textContent = value;
+      const caption = document.createElement('span');
+      caption.textContent = label;
+      stat.append(number, caption);
+      $('#match-stats').appendChild(stat);
+    }
+    const score = gameover.scores[store.playerId] || 0;
+    const bestKey = `duel_best_${snapshot.mode || 'duel'}`;
+    const previousBest = Number(localStorage.getItem(bestKey)) || 0;
+    if (!gameover.forfeit && score > previousBest) {
+      localStorage.setItem(bestKey, String(score));
+      gameover.newRecord = true;
+    }
+    $('#record-message').textContent = gameover.newRecord ? '✦ NEW PERSONAL BEST ✦' : '';
+    const review = $('#answer-review');
+    review.innerHTML = '';
+    for (const answer of ownAnswers) {
+      const item = document.createElement('article');
+      item.className = `review-item ${answer.correct ? 'review-correct' : 'review-wrong'}`;
+      const heading = document.createElement('strong');
+      heading.textContent = `${answer.correct ? '✓' : '✕'} ${answer.text}`;
+      const detail = document.createElement('p');
+      detail.textContent = answer.correct ? `+${answer.scoreDelta} points · ${answer.correctAnswer}` : `Your answer: ${answer.pickedAnswer ?? 'Time ran out'} · Correct: ${answer.correctAnswer}`;
+      item.append(heading, detail);
+      review.appendChild(item);
+    }
 
     // category breakdown
     const [a, b] = snapshot.players;
@@ -568,8 +653,8 @@
       status.textContent = 'Your opponent left the room.';
     } else {
       btn.disabled = iVoted;
-      btn.textContent = iVoted ? 'Waiting for opponent…' : 'Rematch';
-      status.textContent = `${votes.length}/2 ready${votes.length === 1 && !iVoted ? ' — opponent wants a rematch!' : ''}`;
+      btn.textContent = opp?.bot ? 'Play Byte Bot again' : iVoted ? 'Waiting for opponent…' : 'Rematch';
+      status.textContent = opp?.bot ? 'Fresh questions. Another shot at your best.' : `${votes.length}/2 ready${votes.length === 1 && !iVoted ? ' — opponent wants a rematch!' : ''}`;
     }
   }
 
@@ -582,6 +667,9 @@
   function initLanding() {
     showScreen('screen-landing');
     $('#name-input').value = store.name;
+    const duelBest = Number(localStorage.getItem('duel_best_duel')) || 0;
+    const practiceBest = Number(localStorage.getItem('duel_best_practice')) || 0;
+    $('#personal-best').textContent = duelBest || practiceBest ? `YOUR BEST · Duel ${duelBest} · Practice ${practiceBest}` : '10 categories. Hundreds of questions. Bragging rights included.';
     const code = parseHash();
     $('#landing-error').textContent = '';
     if (code) {
@@ -595,16 +683,18 @@
   }
 
   function saveName() {
-    store.name = $('#name-input').value.trim().slice(0, 20);
+    store.name = $('#name-input').value.trim().slice(0, 20) || 'Player';
     localStorage.setItem('duel_name', store.name);
   }
 
-  async function createRoom() {
+  async function createRoom(mode = 'duel') {
     saveName();
-    const btn = $('#btn-create');
-    btn.disabled = true;
+    const buttons = [$('#btn-create'), $('#btn-practice')];
+    buttons.forEach((btn) => { btn.disabled = true; });
     try {
-      const res = await fetch('/api/rooms', { method: 'POST' });
+      const res = await fetch('/api/rooms', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || 'Could not create a room. Try again.');
@@ -615,7 +705,7 @@
     } catch (err) {
       $('#landing-error').textContent = err.message;
     } finally {
-      btn.disabled = false;
+      buttons.forEach((btn) => { btn.disabled = false; });
     }
   }
 
@@ -631,7 +721,24 @@
   }
 
   // ── event wiring ────────────────────────────────────────────────
-  $('#btn-create').addEventListener('click', createRoom);
+  $('#btn-create').addEventListener('click', () => createRoom());
+  $('#btn-practice').addEventListener('click', () => createRoom('practice'));
+  $('#btn-lifeline').addEventListener('click', () => sendMsg({ type: 'lifeline' }));
+  $('#btn-sound').addEventListener('click', () => {
+    soundEnabled = !soundEnabled;
+    localStorage.setItem('duel_sound', soundEnabled ? 'on' : 'off');
+    $('#btn-sound').textContent = soundEnabled ? 'Sound on ♪' : 'Sound off';
+    $('#btn-sound').setAttribute('aria-pressed', String(soundEnabled));
+    if (soundEnabled) playSound(true);
+  });
+  $('#btn-copy-result').addEventListener('click', async () => {
+    if (!gameover) return;
+    const players = snapshot.players.map((p) => `${p.name}: ${gameover.scores[p.id]} points`).join(' vs. ');
+    try {
+      await navigator.clipboard.writeText(`DUEL TRIVIA ${gameover.winnerId === store.playerId ? '🏆' : '🎮'}\n${players}\nPlay at ${location.origin}${location.pathname}`);
+      toast('Result copied — bragging rights unlocked!');
+    } catch { toast('Could not copy your result. Try again.'); }
+  });
   $('#btn-have-code').addEventListener('click', () => {
     const entry = $('#code-entry');
     entry.hidden = !entry.hidden;
@@ -666,11 +773,13 @@
   $('#btn-start').addEventListener('click', () => sendMsg({ type: 'start' }));
   $('#btn-claim').addEventListener('click', () => sendMsg({ type: 'claim_win' }));
   $('#btn-rematch').addEventListener('click', () => sendMsg({ type: 'rematch' }));
-  $('#btn-new-game').addEventListener('click', () => {
+  function returnHome() {
     leaveRoom();
     history.replaceState(null, '', location.pathname);
     initLanding();
-  });
+  }
+  $('#btn-new-game').addEventListener('click', returnHome);
+  $('#btn-leave-lobby').addEventListener('click', returnHome);
 
   window.addEventListener('hashchange', () => {
     const code = parseHash();
@@ -681,6 +790,7 @@
   // keyboard shortcuts A–D / 1–4 on your turn
   window.addEventListener('keydown', (e) => {
     if (!snapshot || snapshot.phase !== 'playing' || !isMyTurn() || reveal) return;
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target instanceof HTMLInputElement) return;
     let idx = -1;
     if (/^[a-d]$/i.test(e.key)) idx = e.key.toLowerCase().charCodeAt(0) - 97;
@@ -689,6 +799,10 @@
   });
 
   // ── boot ────────────────────────────────────────────────────────
+  $('#hero-p1').innerHTML = AVATAR_P1;
+  $('#hero-p2').innerHTML = AVATAR_P2;
+  $('#btn-sound').textContent = soundEnabled ? 'Sound on ♪' : 'Sound off';
+  $('#btn-sound').setAttribute('aria-pressed', String(soundEnabled));
   const bootCode = parseHash();
   if (bootCode && store.name) {
     // Returning player (e.g. reopened tab): rejoin straight away.

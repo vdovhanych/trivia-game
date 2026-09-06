@@ -4,7 +4,8 @@
   "description": "Two-player, turn-based trivia duel played in the browser.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=22"

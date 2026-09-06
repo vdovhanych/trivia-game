@@ -4,6 +4,26 @@ Two-player, turn-based trivia duel played in the browser. Player 1 creates a
 room and shares a link; Player 2 opens it and the battle begins — 10 rounds,
 20 questions, fastest correct answers win.
 
+Want to warm up first? **Play solo vs. Byte Bot** starts immediately with a
+computer rival that takes a few seconds to answer and gets harder questions
+wrong more often. Practice scores and duel scores have separate personal bests,
+saved in your browser.
+
+## Arcade features
+
+- **50:50 lifeline:** each player can remove two wrong answers once per match,
+  on their own turn. The timer keeps running; the server enforces usage and
+  restores the eliminated choices after a reconnect.
+- **Streak bonuses:** consecutive correct answers on your own turns add +25,
+  +50, then +75 points, capped at +75. Wrong answers and timeouts reset the
+  streak. Opponent turns do not interrupt it.
+- **Match recap:** see your accuracy, best streak, category breakdown, and
+  every answer you gave alongside the correct answer. Copy your result to share.
+- **Arcade polish:** difficulty badges, match progress, optional synthesized
+  sound effects (off by default), and keyboard answers with A–D or 1–4.
+- **Quick rematches:** Byte Bot is always ready; a friend duel needs both votes.
+  Lifelines, scores, and streaks reset, and fresh questions are selected.
+
 - **Backend:** Node.js 22, Express + `ws`, all state in memory (no database)
 - **Frontend:** single-page vanilla JS/CSS, no build step
 - **Deps:** `express` and `ws` only
@@ -32,7 +52,7 @@ node server.js          # listens on :3000 (override with PORT=…)
   (20 questions total, no repeats within a game).
 - Each turn has a **server-authoritative 20-second timer**. A correct answer
   scores 100 points plus a time bonus (`floor(secondsRemaining × 5)`, max
-  +100). Wrong answers and timeouts score 0.
+  +100), plus a streak bonus of up to +75. Wrong answers and timeouts score 0.
 - The waiting player spectates the same question and sees the reveal.
 - Correct answer indexes are never sent to clients before the reveal;
   answer choices are re-shuffled server-side per serve.
@@ -131,7 +151,7 @@ Traefik handles WebSocket upgrades automatically.
 | Endpoint | Purpose |
 |---|---|
 | `GET /` | The game (static single page) |
-| `POST /api/rooms` | Create a room → `{ "code": "ABCD" }` (rate-limited 10/min/IP) |
+| `POST /api/rooms` | Create a room → `{ "code": "ABCD" }`; optional JSON `{ "mode": "practice" }` starts a bot match when you join (default: `duel`; rate-limited 10/min/IP) |
 | `GET /ws?room=CODE` | WebSocket endpoint |
 | `GET /healthz` | Container healthcheck |
 
@@ -168,3 +188,11 @@ bank. Configuration:
 
 Questions from the Open Trivia Database are licensed under
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
+## Tests
+
+Run `npm test` after installing dependencies. The integration tests start an
+isolated server on an available port with OpenTDB disabled and exercise real
+WebSocket clients: full matches, scoring and streak resets, lifeline authority,
+reconnection during questions and reveals, rematches, and the practice bot.
+No additional test dependencies are required.

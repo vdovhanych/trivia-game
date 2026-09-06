@@ -90,8 +90,12 @@ function send(ws, msg) {
 // ── Room ──────────────────────────────────────────────────────────
 
 class Room {
-  constructor(code) {
+  constructor(code, mode = 'duel') {
     this.code = code;
+    this.mode = mode;
+    this.matchId = crypto.randomUUID();
+    this.history = [];
+    this.botTimer = null;
     this.phase = 'waiting'; // waiting | playing | finished
     this.players = []; // [{ id, name, role, score, connected, ws, stats, disconnectTimer }]
     this.queue = [];
@@ -117,8 +121,11 @@ class Room {
   snapshot() {
     return {
       phase: this.phase,
+      mode: this.mode,
+      matchId: this.matchId,
       players: this.players.map((p) => ({
         id: p.id, name: p.name, role: p.role, score: p.score, connected: p.connected,
+        bot: Boolean(p.bot), streak: p.streak, bestStreak: p.bestStreak, lifelineUsed: p.lifelineUsed,
       })),
       round: Math.min(Math.floor(this.turnIndex / 2) + 1, TOTAL_ROUNDS),
       totalRounds: TOTAL_ROUNDS,
@@ -140,17 +147,20 @@ class Room {
     const { q, choices, deadline } = this.current;
     return {
       type: 'question',
+      matchId: this.matchId,
       round: Math.floor(this.turnIndex / 2) + 1,
       turn: this.turnIndex + 1,
       turnPlayerId: this.activePlayer.id,
-      question: { text: q.text, choices, category: q.category },
+      question: { text: q.text, choices, category: q.category, difficulty: q.difficulty },
+      eliminated: this.current.eliminated || [],
       deadlineTs: deadline,
     };
   }
 
   // ── joining / reconnect ──
   join(ws, name, playerId) {
-    const existing = playerId && this.players.find((p) => p.id === playerId);
+    if (ws.player) return;
+    const existing = playerId && this.players.find((p) => p.id === playerId && !p.bot);
     if (existing) return this.reattach(existing, ws, name);
 
     if (this.players.length >= 2) {
@@ -173,6 +183,9 @@ class Room {
       connected: true,
       ws,
       stats: {},
+      streak: 0,
+      bestStreak: 0,
+      lifelineUsed: false,
       disconnectTimer: null,
     };
     this.players.push(player);
@@ -180,6 +193,14 @@ class Room {
     ws.room = this;
     send(ws, { type: 'joined', playerId: player.id, role, roomCode: this.code, ...this.snapshot() });
     this.broadcastState();
+    if (this.mode === 'practice' && this.players.length === 1) {
+      this.players.push({
+        id: crypto.randomUUID(), name: 'Byte Bot', role: 'guest', bot: true,
+        score: 0, connected: true, ws: null, stats: {}, streak: 0,
+        bestStreak: 0, lifelineUsed: false, disconnectTimer: null,
+      });
+      this.start(player);
+    }
   }
 
   reattach(player, ws, name) {
@@ -200,8 +221,9 @@ class Room {
       if (other) send(other.ws, { type: 'opponent_reconnected' });
     }
     this.broadcastState();
-    if (this.phase === 'playing' && this.current && !this.current.resolved) {
+    if (this.phase === 'playing' && this.current) {
       send(ws, this.questionMessage());
+      if (this.current.resolved) send(ws, this.current.reveal);
     }
     if (this.phase === 'finished' && this.gameoverMsg) {
       send(ws, this.gameoverMsg);
@@ -231,6 +253,7 @@ class Room {
     if (this.phase !== 'waiting') return send(sender.ws, { type: 'error', message: 'Game already started.' });
     if (sender.role !== 'host') return send(sender.ws, { type: 'error', message: 'Only the host can start the game.' });
     if (this.players.length < 2) return send(sender.ws, { type: 'error', message: 'Waiting for a second player.' });
+    if (!this.players.every((p) => p.connected)) return send(sender.ws, { type: 'error', message: 'Wait for your opponent to reconnect.' });
     this.phase = 'playing';
     this.newQueue();
     this.turnIndex = 0;
@@ -256,43 +279,75 @@ class Room {
     this.broadcastState();
     this.broadcast(this.questionMessage());
     this.turnTimer = setTimeout(() => this.resolveTurn(null), TURN_MS + 150);
+    if (this.activePlayer.bot) {
+      // A fallible practice opponent, with a human-paced response time.
+      const accuracy = { easy: 0.8, medium: 0.6, hard: 0.4 }[q.difficulty] ?? 0.6;
+      const wrong = [0, 1, 2, 3].filter((i) => i !== this.current.correctIndex);
+      const choice = crypto.randomInt(100) < accuracy * 100
+        ? this.current.correctIndex : wrong[crypto.randomInt(wrong.length)];
+      this.botTimer = setTimeout(() => this.answer(this.activePlayer, choice), 2500 + crypto.randomInt(3500));
+    }
   }
 
   answer(sender, choiceIndex) {
     if (this.phase !== 'playing' || !this.current || this.current.resolved) return;
     if (sender !== this.activePlayer) return;
     if (!Number.isInteger(choiceIndex) || choiceIndex < 0 || choiceIndex > 3) return;
+    if (this.current.eliminated?.includes(choiceIndex)) return;
     if (Date.now() > this.current.deadline) return; // late answer: let the timeout stand
     this.resolveTurn(choiceIndex);
+  }
+
+  lifeline(sender) {
+    if (this.phase !== 'playing' || !this.current || this.current.resolved) return;
+    if (sender !== this.activePlayer || sender.lifelineUsed || Date.now() > this.current.deadline) return;
+    sender.lifelineUsed = true;
+    this.current.eliminated = shuffle([0, 1, 2, 3].filter((i) => i !== this.current.correctIndex)).slice(0, 2);
+    this.broadcast({ type: 'lifeline', eliminated: this.current.eliminated });
+    this.broadcastState();
   }
 
   resolveTurn(pickedIndex) {
     if (!this.current || this.current.resolved) return;
     this.current.resolved = true;
     clearTimeout(this.turnTimer);
+    clearTimeout(this.botTimer);
     this.turnTimer = null;
 
     const player = this.activePlayer;
     const { q, correctIndex, deadline } = this.current;
     const isCorrect = pickedIndex === correctIndex;
     let scoreDelta = 0;
+    player.streak = isCorrect ? player.streak + 1 : 0;
+    player.bestStreak = Math.max(player.bestStreak, player.streak);
+    const streakBonus = isCorrect ? Math.min(75, Math.max(0, player.streak - 1) * 25) : 0;
     if (isCorrect) {
       const secondsRemaining = Math.max(0, (deadline - Date.now()) / 1000);
-      scoreDelta = 100 + Math.min(100, Math.floor(secondsRemaining * 5));
+      scoreDelta = 100 + Math.min(100, Math.floor(secondsRemaining * 5)) + streakBonus;
       player.score += scoreDelta;
     }
     const stat = player.stats[q.category] || (player.stats[q.category] = { correct: 0, total: 0 });
     stat.total += 1;
     if (isCorrect) stat.correct += 1;
 
-    this.broadcast({
+    this.current.reveal = {
       type: 'reveal',
       correctIndex,
       pickedIndex,
       answeredBy: player.id,
       scoreDelta,
+      streakBonus,
+      streak: player.streak,
       scores: Object.fromEntries(this.players.map((p) => [p.id, p.score])),
+    };
+    this.history.push({
+      turn: this.turnIndex + 1, playerId: player.id, text: q.text, category: q.category,
+      correctAnswer: this.current.choices[correctIndex],
+      pickedAnswer: pickedIndex === null ? null : this.current.choices[pickedIndex],
+      correct: isCorrect, scoreDelta, lifeline: Boolean(this.current.eliminated),
     });
+    this.broadcast(this.current.reveal);
+    this.broadcastState();
 
     this.revealTimer = setTimeout(() => {
       this.revealTimer = null;
@@ -306,6 +361,7 @@ class Room {
   finishGame(forcedWinnerId) {
     clearTimeout(this.turnTimer);
     clearTimeout(this.revealTimer);
+    clearTimeout(this.botTimer);
     this.turnTimer = this.revealTimer = null;
     this.current = null;
     this.phase = 'finished';
@@ -320,6 +376,8 @@ class Room {
     }
     this.gameoverMsg = {
       type: 'gameover',
+      matchId: this.matchId,
+      history: this.history,
       winnerId,
       forfeit: Boolean(forcedWinnerId),
       scores: Object.fromEntries(this.players.map((p) => [p.id, p.score])),
@@ -337,8 +395,14 @@ class Room {
   rematch(sender) {
     if (this.phase !== 'finished') return;
     this.rematchVotes.add(sender.id);
+    for (const p of this.players) if (p.bot) this.rematchVotes.add(p.id);
     if (this.rematchVotes.size >= 2 && this.players.every((p) => p.connected)) {
-      for (const p of this.players) { p.score = 0; p.stats = {}; }
+      for (const p of this.players) {
+        p.score = 0; p.stats = {}; p.streak = 0; p.bestStreak = 0; p.lifelineUsed = false;
+      }
+      this.matchId = crypto.randomUUID();
+      this.history = [];
+      this.gameoverMsg = null;
       this.rematchVotes.clear();
       this.phase = 'playing';
       this.finishedAt = null;
@@ -352,6 +416,7 @@ class Room {
   }
 
   destroy() {
+    clearTimeout(this.botTimer);
     clearTimeout(this.turnTimer);
     clearTimeout(this.revealTimer);
     for (const p of this.players) {
@@ -367,12 +432,15 @@ class Room {
 const app = express();
 app.set('trust proxy', true);
 app.disable('x-powered-by');
+app.use(express.json({ limit: '2kb' }));
 
 app.get('/healthz', (req, res) => res.status(200).send('ok'));
 
 // Tiny in-memory rate limiter for room creation: 10/min/IP.
 const createHits = new Map();
 app.post('/api/rooms', (req, res) => {
+  const mode = req.body?.mode ?? 'duel';
+  if (!['duel', 'practice'].includes(mode)) return res.status(400).json({ error: 'Choose duel or practice mode.' });
   const now = Date.now();
   const ip = req.ip || 'unknown';
   const hits = (createHits.get(ip) || []).filter((t) => t > now - 60_000);
@@ -382,7 +450,7 @@ app.post('/api/rooms', (req, res) => {
 
   const code = makeRoomCode();
   if (!code) return res.status(503).json({ error: 'No room codes available. Try again later.' });
-  rooms.set(code, new Room(code));
+  rooms.set(code, new Room(code, mode));
   res.status(201).json({ code });
 });
 
@@ -392,10 +460,11 @@ const server = http.createServer(app);
 
 // ── WebSocket ─────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 
 wss.on('connection', (ws, req) => {
   ws.isAlive = true;
+  ws.on('error', () => { /* A malformed frame closes this client, not the server. */ });
   ws.on('pong', () => { ws.isAlive = true; });
 
   const code = String(new URL(req.url, 'http://localhost').searchParams.get('room') || '')
@@ -423,6 +492,7 @@ wss.on('connection', (ws, req) => {
     switch (msg.type) {
       case 'start': return room.start(player);
       case 'answer': return room.answer(player, msg.choiceIndex);
+      case 'lifeline': return room.lifeline(player);
       case 'rematch': return room.rematch(player);
       case 'claim_win': return room.claimWin(player);
       default: return;
@@ -463,5 +533,5 @@ setInterval(() => {
 opentdb.start();
 
 server.listen(PORT, () => {
-  console.log(`Duel Trivia listening on http://localhost:${PORT}`);
+  console.log(`Duel Trivia listening on http://localhost:${server.address().port}`);
 });

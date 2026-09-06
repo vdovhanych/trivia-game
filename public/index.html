@@ -16,11 +16,17 @@
   <div class="crt-overlay" aria-hidden="true"></div>
 
   <main id="app">
+    <nav class="topbar" aria-label="Game controls">
+      <a class="arcade-label" href="#">✦ THE TRIVIA ARCADE</a>
+      <button id="btn-sound" class="sound-toggle" aria-pressed="false">Sound off</button>
+    </nav>
     <h1 class="sr-only">Duel Trivia</h1>
     <!-- ── Landing ─────────────────────────────────── -->
     <section id="screen-landing" class="screen">
+      <p class="eyebrow">INSERT CURIOSITY. PRESS PLAY.</p>
       <p class="logo" aria-hidden="true">DUEL<span class="logo-accent">TRIVIA</span></p>
       <p class="tagline">two players &middot; ten rounds &middot; one winner</p>
+      <div class="hero-duel" aria-hidden="true"><span id="hero-p1" class="hero-avatar"></span><span class="pixel">VS</span><span id="hero-p2" class="hero-avatar"></span></div>
 
       <div class="panel">
         <label class="field-label" for="name-input">Your name</label>
@@ -28,6 +34,8 @@
 
         <div id="landing-actions">
           <button id="btn-create" class="btn btn-primary btn-block">Create game</button>
+          <button id="btn-practice" class="btn btn-p2 btn-block">Play solo vs. Byte Bot <span class="button-badge">NEW</span></button>
+          <p class="mode-hint">Challenge a friend, or warm up with a practice rival.</p>
           <button id="btn-have-code" class="btn btn-ghost btn-block" aria-expanded="false" aria-controls="code-entry">I have a code</button>
           <div id="code-entry" hidden>
             <label class="field-label" for="code-input">Room code</label>
@@ -47,6 +55,12 @@
 
         <p id="landing-error" class="error-text" role="alert"></p>
       </div>
+      <div class="feature-strip" aria-label="How to play">
+        <div><span class="feature-icon">20s</span><strong>Think fast</strong><span>Quicker answers, bigger scores.</span></div>
+        <div><span class="feature-icon">50:50</span><strong>Play your lifeline</strong><span>Two wrong answers disappear. Once per match.</span></div>
+        <div><span class="feature-icon">+75</span><strong>Build a streak</strong><span>Keep getting it right to earn bonus points.</span></div>
+      </div>
+      <p id="personal-best" class="hint"></p>
     </section>
 
     <!-- ── Lobby ───────────────────────────────────── -->
@@ -63,7 +77,8 @@
         <p id="lobby-status" class="lobby-status" aria-live="polite"></p>
         <button id="btn-start" class="btn btn-primary btn-block" hidden>Start game</button>
       </div>
-      <p class="hint">Send the link to a friend — the game starts when both of you are in.</p>
+      <p class="hint">Send the link to a friend, then hit Start when you’re both ready.</p>
+      <button id="btn-leave-lobby" class="text-button">← Back to arcade</button>
     </section>
 
     <!-- ── Game ────────────────────────────────────── -->
@@ -85,20 +100,23 @@
       </header>
 
       <p id="round-counter" class="round-counter pixel"></p>
+      <div id="match-progress" class="match-progress" role="progressbar" aria-label="Match progress" aria-valuemin="0" aria-valuemax="20" aria-valuenow="0"><span></span></div>
       <p id="turn-banner" class="turn-banner pixel" aria-live="polite"></p>
 
       <div id="game-card" class="panel game-card">
-        <p id="category-chip" class="category-chip"><span class="cat-icon" aria-hidden="true"></span><span class="cat-name"></span></p>
+        <div class="question-meta"><p id="category-chip" class="category-chip"><span class="cat-icon" aria-hidden="true"></span><span class="cat-name"></span></p><span id="difficulty-chip" class="difficulty-chip"></span></div>
         <p id="question-text" class="question-text"></p>
         <div id="timer" class="timer" role="timer" aria-label="Time remaining">
           <span class="timer-blocks" aria-hidden="true"></span>
           <span id="timer-seconds" class="timer-seconds pixel"></span>
         </div>
         <div id="answers" class="answers" role="group" aria-label="Answer choices"></div>
+        <div class="game-tools"><button id="btn-lifeline" class="lifeline-button">50:50 <span>Remove two</span></button><span id="streak-label" class="streak-label" aria-live="polite"></span></div>
         <p id="reveal-banner" class="reveal-banner" aria-live="polite" hidden></p>
       </div>
 
       <p id="game-status" class="game-status" aria-live="polite"></p>
+      <p class="keyboard-hint">KEYBOARD <kbd>A</kbd> <kbd>B</kbd> <kbd>C</kbd> <kbd>D</kbd> or <kbd>1</kbd>–<kbd>4</kbd></p>
       <button id="btn-claim" class="btn btn-primary btn-block" hidden>Claim win — opponent left</button>
     </section>
 
@@ -108,11 +126,15 @@
       <h2 id="over-title" class="screen-title pixel" aria-live="polite"></h2>
       <div class="panel">
         <div id="final-scores" class="final-scores"></div>
+        <div id="match-stats" class="match-stats"></div>
+        <p id="record-message" class="record-message"></p>
         <h3 class="breakdown-title">Category breakdown</h3>
         <table class="breakdown" id="breakdown">
           <thead><tr><th scope="col">Category</th><th scope="col" id="bd-p1"></th><th scope="col" id="bd-p2"></th></tr></thead>
           <tbody></tbody>
         </table>
+        <details class="review-panel"><summary>Review your answers</summary><div id="answer-review"></div></details>
+        <button id="btn-copy-result" class="btn btn-ghost btn-block">Copy result</button>
         <button id="btn-rematch" class="btn btn-primary btn-block">Rematch</button>
         <p id="rematch-status" class="lobby-status" aria-live="polite"></p>
         <button id="btn-new-game" class="btn btn-ghost btn-block">New game</button>
