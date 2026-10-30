@@ -178,7 +178,9 @@
     ws.addEventListener('open', () => {
       if (ws !== connection) return;
       reconnectAttempts = 0;
-      sendMsg({ type: 'join', name: store.name, playerId: store.playerId });
+      let session = {};
+      try { session = JSON.parse(localStorage.getItem(`duel_session_${roomCode}`)) || {}; } catch { /* Start a fresh seat. */ }
+      sendMsg({ type: 'join', name: store.name, playerId: session.playerId, reconnectToken: session.reconnectToken });
       clearInterval(pingInterval);
       pingInterval = setInterval(() => sendMsg({ type: 'ping' }), 25000);
     });
@@ -224,7 +226,7 @@
     switch (msg.type) {
       case 'joined':
         store.playerId = msg.playerId;
-        localStorage.setItem('duel_pid', store.playerId);
+        localStorage.setItem(`duel_session_${roomCode}`, JSON.stringify({ playerId: msg.playerId, reconnectToken: msg.reconnectToken }));
         snapshot = msg;
         render();
         break;
@@ -277,7 +279,7 @@
       leaveRoom();
       history.replaceState(null, '', location.pathname);
       showLandingError('That room doesn’t exist or has expired.');
-    } else if (msg.code === 'room_full' || msg.code === 'in_progress') {
+    } else if (msg.code === 'room_full' || msg.code === 'in_progress' || msg.code === 'invalid_session') {
       leaveRoom();
       showLandingError(msg.message);
     } else {
