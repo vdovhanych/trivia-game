@@ -68,6 +68,18 @@ The app serves plain HTTP on port 3000 and expects the proxy to terminate
 TLS. WebSockets are served on `/ws`, so the proxy must forward upgrade
 headers and keep long-lived connections open.
 
+Client IPs default to the direct peer address. When using a reverse proxy, set
+`TRUST_PROXY` to a comma-separated list of its IP addresses or CIDRs (for example
+`127.0.0.1/32,::1/128` for a local proxy). The proxy must overwrite or safely append
+`X-Forwarded-For`, and direct access to the app should be restricted. Do not use a
+blanket trust setting. Without this configuration, proxied users share the proxy's
+10-rooms-per-minute limit. Verify the actual proxy source addresses in your deployment.
+
+The server also caps live rooms at 1,000 and WebSocket connections at 2,000,
+closes sockets that do not join within 10 seconds, and limits each socket to 30
+messages per second. These are application safeguards; keep connection and request
+limits at the reverse proxy for internet-facing deployments.
+
 ### nginx
 
 ```nginx

@@ -19,6 +19,9 @@ const WAITING_TTL_MS = 30 * 60_000;
 const FINISHED_TTL_MS = 10 * 60_000;
 const HARD_TTL_MS = 60 * 60_000;
 
+const MAX_ROOMS = 1000;
+const MAX_CONNECTIONS = 2000;
+
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 const rooms = new Map(); // code -> Room
@@ -441,7 +444,8 @@ class Room {
 // ── HTTP ──────────────────────────────────────────────────────────
 
 const app = express();
-app.set('trust proxy', true);
+// Only explicitly trusted proxy addresses may supply the client IP.
+app.set('trust proxy', process.env.TRUST_PROXY ? process.env.TRUST_PROXY.split(',').map((s) => s.trim()) : false);
 app.disable('x-powered-by');
 app.use(express.json({ limit: '2kb' }));
 
@@ -452,6 +456,7 @@ const createHits = new Map();
 app.post('/api/rooms', (req, res) => {
   const mode = req.body?.mode ?? 'duel';
   if (!['duel', 'practice'].includes(mode)) return res.status(400).json({ error: 'Choose duel or practice mode.' });
+  if (rooms.size >= MAX_ROOMS) return res.status(503).json({ error: 'Server is full. Try again later.' });
   const now = Date.now();
   const ip = req.ip || 'unknown';
   const hits = (createHits.get(ip) || []).filter((t) => t > now - 60_000);
@@ -474,14 +479,22 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 
 wss.on('connection', (ws, req) => {
-  ws.isAlive = true;
   ws.on('error', () => { /* A malformed frame closes this client, not the server. */ });
+  if (wss.clients.size > MAX_CONNECTIONS) return ws.close(1013, 'server busy');
+  const joinTimer = setTimeout(() => { if (!ws.player) ws.close(4006, 'join timeout'); }, 10_000);
+  ws.on('close', () => clearTimeout(joinTimer));
+  let messageWindow = Date.now();
+  let messageCount = 0;
+  ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
   const code = String(new URL(req.url, 'http://localhost').searchParams.get('room') || '')
     .toUpperCase().slice(0, 8);
 
   ws.on('message', (data) => {
+    const now = Date.now();
+    if (now - messageWindow >= 1000) { messageWindow = now; messageCount = 0; }
+    if (++messageCount > 30) return ws.close(1008, 'message rate exceeded');
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
     if (!msg || typeof msg.type !== 'string') return;
