@@ -1,8 +1,8 @@
 # Duel Trivia — Kubernetes manifest (Deployment + Service).
 #
-# Build and push the image first, e.g.:
-#   docker build -t ghcr.io/vdovhanych/trivia-game:latest .
-#   docker push ghcr.io/vdovhanych/trivia-game:latest
+# Pushes to main build/test and publish the image via .github/workflows/image.yml.
+# Wait for publication to succeed before deploying. The workflow does not deploy.
+# Images are linux/amd64; ARM nodes require an additional platform build.
 #
 # Apply with:
 #   kubectl apply -f k8s/manifest.yaml
