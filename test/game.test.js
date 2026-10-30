@@ -47,6 +47,7 @@ async function connect(code, id = randomUUID(), options = {}) {
   const waiters = [];
   socket.on('message', (data) => {
     const message = JSON.parse(data);
+    if (message.type === 'question') client.question = message;
     if (message.type === 'joined') { client.id = message.playerId; sessions.set(client.id, message.reconnectToken); }
     const index = waiters.findIndex((waiter) => waiter.predicate(message));
     if (index < 0) messages.push(message);
@@ -54,7 +55,12 @@ async function connect(code, id = randomUUID(), options = {}) {
   });
   const client = {
     id,
-    send(message) { socket.send(JSON.stringify(message)); },
+    send(message) {
+      if (['answer', 'lifeline'].includes(message.type)) {
+        message = { matchId: client.question?.matchId, turn: client.question?.turn, ...message };
+      }
+      socket.send(JSON.stringify(message));
+    },
     next(type, predicate = () => true, timeout = 3000) {
       const matches = (message) => message.type === type && predicate(message);
       const index = messages.findIndex(matches);
@@ -93,6 +99,7 @@ test('full duel: authority, lifelines, streaks, answer review, and fresh rematch
   const served = new Set();
   for (let turn = 1; turn <= 20; turn++) {
     const q = await a.next('question', (m) => m.turn === turn);
+    await b.next('question', (m) => m.turn === turn);
     firstMatch ||= q.matchId;
     assert.equal(q.question.correctIndex, undefined);
     assert.equal(q.correctIndex, undefined);
@@ -258,4 +265,33 @@ test('object-valued names cannot crash the server', async () => {
   assert.equal((await player.next('joined')).players[0].name, 'Player 1');
   assert.equal(await (await fetch(`${base}/healthz`)).text(), 'ok');
   player.close();
+});
+
+
+test('delayed commands cannot answer or use a lifeline on another turn or match', async () => {
+  const code = await room();
+  const a = await connect(code);
+  const b = await connect(code);
+  await b.next('joined');
+  a.send({ type: 'start' });
+  const first = await a.next('question');
+  a.send({ type: 'answer', choiceIndex: correctIndex(first) });
+  await a.next('reveal');
+  const second = await b.next('question', (q) => q.turn === 2);
+  b.send({ type: 'answer', choiceIndex: correctIndex(second) });
+  await b.next('reveal', (r) => r.answeredBy === b.id);
+  const third = await a.next('question', (q) => q.turn === 3);
+  a.send({ type: 'lifeline', matchId: first.matchId, turn: first.turn });
+  a.send({ type: 'answer', choiceIndex: 0, matchId: first.matchId, turn: first.turn });
+  a.send({ type: 'answer', choiceIndex: 0, matchId: 'old-match', turn: third.turn });
+  // A valid lifeline is a processing barrier for all preceding messages.
+  a.send({ type: 'lifeline' });
+  await a.next('lifeline');
+  const state = await a.next('state', (s) => s.players[0].lifelineUsed);
+  assert.equal(state.players[0].streak, 1);
+  a.send({ type: 'answer', choiceIndex: correctIndex(third) });
+  const result = await a.next('reveal', (r) => r.answeredBy === a.id);
+  assert.equal(result.correctIndex, correctIndex(third));
+  assert.equal(result.streak, 2);
+  a.close(); b.close();
 });

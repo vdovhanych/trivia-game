@@ -169,6 +169,13 @@
 
   // ── connection ──────────────────────────────────────────────────
   function connect(code) {
+    if (ws) {
+      const previous = ws;
+      ws = null;
+      previous.close();
+    }
+    clearTimeout(reconnectTimer);
+    clearInterval(pingInterval);
     roomCode = code.toUpperCase();
     intentionalClose = false;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -219,6 +226,8 @@
     roomCode = null;
     snapshot = question = reveal = gameover = null;
     myAnswer = null;
+    delete $('#answers').dataset.turn;
+    delete $('#reveal-banner').dataset.done;
   }
 
   // ── message handling ────────────────────────────────────────────
@@ -473,7 +482,7 @@
     if (!ws || ws.readyState !== WebSocket.OPEN) return toast('Reconnecting — try again when connected.');
     if (Date.now() >= question.deadlineTs) return;
     myAnswer = i;
-    sendMsg({ type: 'answer', choiceIndex: i });
+    sendMsg({ type: 'answer', choiceIndex: i, matchId: question.matchId, turn: question.turn });
     renderAnswers();
     $('#btn-lifeline').disabled = true;
   }
@@ -725,7 +734,7 @@
   // ── event wiring ────────────────────────────────────────────────
   $('#btn-create').addEventListener('click', () => createRoom());
   $('#btn-practice').addEventListener('click', () => createRoom('practice'));
-  $('#btn-lifeline').addEventListener('click', () => sendMsg({ type: 'lifeline' }));
+  $('#btn-lifeline').addEventListener('click', () => sendMsg({ type: 'lifeline', matchId: question?.matchId, turn: question?.turn }));
   $('#btn-sound').addEventListener('click', () => {
     soundEnabled = !soundEnabled;
     localStorage.setItem('duel_sound', soundEnabled ? 'on' : 'off');

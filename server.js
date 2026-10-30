@@ -375,6 +375,10 @@ class Room {
     this.finishedAt = Date.now();
     this.claimableBy = null;
     this.rematchVotes.clear();
+    for (const p of this.players) {
+      clearTimeout(p.disconnectTimer);
+      p.disconnectTimer = null;
+    }
 
     let winnerId = forcedWinnerId;
     if (!winnerId) {
@@ -498,8 +502,10 @@ wss.on('connection', (ws, req) => {
     if (!room || !player) return;
     switch (msg.type) {
       case 'start': return room.start(player);
-      case 'answer': return room.answer(player, msg.choiceIndex);
-      case 'lifeline': return room.lifeline(player);
+      case 'answer':
+      case 'lifeline':
+        if (msg.matchId !== room.matchId || msg.turn !== room.turnIndex + 1) return;
+        return msg.type === 'answer' ? room.answer(player, msg.choiceIndex) : room.lifeline(player);
       case 'rematch': return room.rematch(player);
       case 'claim_win': return room.claimWin(player);
       default: return;
