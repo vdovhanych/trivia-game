@@ -42,7 +42,7 @@ jobs:
           docker run --detach --name trivia-smoke \
             --publish 127.0.0.1:3000:3000 --env OPENTDB=off trivia-test:local
           trap 'docker logs trivia-smoke; docker rm --force trivia-smoke' EXIT
-          curl --fail --silent --show-error --retry 15 --retry-connrefused \
+          curl --fail --silent --show-error --retry 15 --retry-all-errors \
             --retry-delay 1 --max-time 3 http://127.0.0.1:3000/healthz
           curl --fail --silent --show-error http://127.0.0.1:3000/ > /dev/null
 
