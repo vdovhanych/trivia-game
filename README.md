@@ -56,7 +56,7 @@ node server.js          # listens on :3000 (override with PORT=…)
 - The waiting player spectates the same question and sees the reveal.
 - Correct answer indexes are never sent to clients before the reveal;
   answer choices are re-shuffled server-side per serve.
-- Reconnects are seamless: the client keeps a `playerId` in `localStorage`
+- Reconnects are seamless: the client keeps a server-issued player ID and private, per-room reconnect token in `localStorage`
   and is re-attached to its seat with the current game state. If an opponent
   stays disconnected for 2+ minutes mid-game, you can claim the win.
 - Rooms expire automatically (30 min unstarted, 10 min after finishing,

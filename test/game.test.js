@@ -11,6 +11,7 @@ const questions = require('../questions');
 let server;
 let base;
 const clients = new Set();
+const sessions = new Map();
 before(async () => {
   server = spawn(process.execPath, ['server.js'], {
     cwd: require('node:path').resolve(__dirname, '..'),
@@ -40,12 +41,13 @@ async function room(mode = 'duel') {
   assert.equal(response.status, 201);
   return (await response.json()).code;
 }
-async function connect(code, id = randomUUID()) {
+async function connect(code, id = randomUUID(), options = {}) {
   const socket = new WebSocket(`${base.replace('http', 'ws')}/ws?room=${code}`);
   const messages = [];
   const waiters = [];
   socket.on('message', (data) => {
     const message = JSON.parse(data);
+    if (message.type === 'joined') { client.id = message.playerId; sessions.set(client.id, message.reconnectToken); }
     const index = waiters.findIndex((waiter) => waiter.predicate(message));
     if (index < 0) messages.push(message);
     else { const [waiter] = waiters.splice(index, 1); clearTimeout(waiter.timer); waiter.resolve(message); }
@@ -70,7 +72,7 @@ async function connect(code, id = randomUUID()) {
   };
   clients.add(client);
   await once(socket, 'open');
-  client.send({ type: 'join', playerId: id, name: 'Test Player' });
+  client.send({ type: 'join', playerId: id, reconnectToken: options.token ?? sessions.get(id), name: options.name ?? 'Test Player' });
   return client;
 }
 function correctIndex(message) {
@@ -147,6 +149,7 @@ test('full duel: authority, lifelines, streaks, answer review, and fresh rematch
 test('reconnect restores used lifeline and answer reveal', async () => {
   const code = await room();
   let a = await connect(code);
+  await a.next('joined');
   const id = a.id;
   const b = await connect(code);
   await b.next('joined');
@@ -231,4 +234,28 @@ test('oversized WebSocket messages do not crash the server', async () => {
   const [codeReceived] = await once(socket, 'close');
   assert.equal(codeReceived, 1009);
   assert.equal(await (await fetch(`${base}/healthz`)).text(), 'ok');
+});
+
+
+test('public player IDs cannot take over a seat and credentials stay private', async () => {
+  const code = await room();
+  const host = await connect(code);
+  const joined = await host.next('joined');
+  const guest = await connect(code);
+  const other = await guest.next('joined');
+  assert.ok(joined.reconnectToken.length >= 64);
+  assert.equal(JSON.stringify(other.players).includes(joined.reconnectToken), false);
+  const attacker = await connect(code, host.id, { token: 'wrong' });
+  assert.equal((await attacker.next('error')).code, 'invalid_session');
+  host.send({ type: 'start' });
+  assert.equal((await host.next('question')).turnPlayerId, host.id);
+  attacker.close(); host.close(); guest.close();
+});
+
+test('object-valued names cannot crash the server', async () => {
+  const code = await room();
+  const player = await connect(code, undefined, { name: { toString: null } });
+  assert.equal((await player.next('joined')).players[0].name, 'Player 1');
+  assert.equal(await (await fetch(`${base}/healthz`)).text(), 'ok');
+  player.close();
 });

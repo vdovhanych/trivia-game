@@ -79,7 +79,7 @@ function pickQuestions(excludeIds = new Set()) {
 }
 
 function sanitizeName(name, fallback) {
-  const clean = String(name || '').replace(/[\x00-\x1F\x7F]/g, '').trim().slice(0, 20);
+  const clean = (typeof name === 'string' ? name : '').replace(/[\x00-\x1F\x7F]/g, '').trim().slice(0, 20);
   return clean || fallback;
 }
 
@@ -158,10 +158,17 @@ class Room {
   }
 
   // ── joining / reconnect ──
-  join(ws, name, playerId) {
+  join(ws, name, playerId, reconnectToken) {
     if (ws.player) return;
     const existing = playerId && this.players.find((p) => p.id === playerId && !p.bot);
-    if (existing) return this.reattach(existing, ws, name);
+    if (existing) {
+      if (typeof reconnectToken !== 'string' || reconnectToken !== existing.reconnectToken) {
+        send(ws, { type: 'error', code: 'invalid_session', message: 'Cannot restore this seat. Open a new game.' });
+        ws.close(4005, 'invalid session');
+        return;
+      }
+      return this.reattach(existing, ws, name);
+    }
 
     if (this.players.length >= 2) {
       send(ws, { type: 'error', code: 'room_full', message: 'Room is full.' });
@@ -174,9 +181,9 @@ class Room {
       return;
     }
     const role = this.players.length === 0 ? 'host' : 'guest';
-    const clientId = typeof playerId === 'string' && /^[0-9a-f-]{36}$/i.test(playerId) ? playerId : null;
     const player = {
-      id: clientId || crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      reconnectToken: crypto.randomBytes(32).toString('hex'),
       name: sanitizeName(name, role === 'host' ? 'Player 1' : 'Player 2'),
       role,
       score: 0,
@@ -191,7 +198,7 @@ class Room {
     this.players.push(player);
     ws.player = player;
     ws.room = this;
-    send(ws, { type: 'joined', playerId: player.id, role, roomCode: this.code, ...this.snapshot() });
+    send(ws, { type: 'joined', playerId: player.id, reconnectToken: player.reconnectToken, role, roomCode: this.code, ...this.snapshot() });
     this.broadcastState();
     if (this.mode === 'practice' && this.players.length === 1) {
       this.players.push({
@@ -215,7 +222,7 @@ class Room {
     if (this.claimableBy && this.claimableBy === this.otherPlayer(player)?.id) this.claimableBy = null;
     ws.player = player;
     ws.room = this;
-    send(ws, { type: 'joined', playerId: player.id, role: player.role, roomCode: this.code, ...this.snapshot() });
+    send(ws, { type: 'joined', playerId: player.id, reconnectToken: player.reconnectToken, role: player.role, roomCode: this.code, ...this.snapshot() });
     if (wasDisconnected) {
       const other = this.otherPlayer(player);
       if (other) send(other.ws, { type: 'opponent_reconnected' });
@@ -483,7 +490,7 @@ wss.on('connection', (ws, req) => {
         send(ws, { type: 'error', code: 'no_room', message: 'This room doesn’t exist or has expired.' });
         return ws.close(4004, 'no room');
       }
-      return room.join(ws, msg.name, msg.playerId);
+      return room.join(ws, msg.name, msg.playerId, msg.reconnectToken);
     }
 
     const room = ws.room;
