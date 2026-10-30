@@ -113,14 +113,35 @@ server {
 ### Kubernetes + cloudflared
 
 `k8s/manifest.yaml` contains a Deployment and a ClusterIP Service — no
-persistence, no ingress. Build and push the image, point the manifest at it,
-and apply:
+persistence, no ingress. The **Container image** workflow builds and tests the
+production image for pull requests without publishing or registry credentials.
+Every push to `main` publishes to `ghcr.io/vdovhanych/trivia-game` after those
+container tests pass:
+
+- `latest`: the latest successfully published main build (used by the manifest).
+- `sha-<full-40-character-commit>`: a tag identifying the source revision. For
+  strict immutability, deploy the image digest; rerunning a commit can rebuild
+  its tag with newer base-image contents.
+
+The workflow builds `linux/amd64`, matching the default hosted Linux runner;
+no deployment architecture override is declared in this repository. ARM nodes
+need an additional platform build before using this image.
+
+Authentication uses the repository's automatic `GITHUB_TOKEN` with
+`packages: write` only in the main-push publication job; no PAT or extra secret
+is needed. If the GHCR package was previously created manually, its **Manage
+Actions access** must allow this repository to write the package. Package
+visibility is not changed by the workflow; private images still require the
+pull secret described below.
+
+Wait for the main publication job to succeed, then apply the manifest when you
+want to deploy:
 
 ```sh
-docker build -t ghcr.io/vdovhanych/trivia-game:latest .
-docker push ghcr.io/vdovhanych/trivia-game:latest
 kubectl apply -f k8s/manifest.yaml
 ```
+
+Publishing an image does not restart running pods or deploy the application.
 
 Then route a hostname to the service in your cloudflared config:
 
